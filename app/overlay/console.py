@@ -19,10 +19,13 @@ __all__ = ["ConsoleRenderer"]
 class ConsoleRenderer(SubtitleRenderer):
     """Imprime las cues finales y reescribe las parciales en la misma línea."""
 
-    def __init__(self, *, stream: TextIO | None = None, show_partials: bool = True) -> None:
+    def __init__(
+        self, *, stream: TextIO | None = None, show_partials: bool = True, show_language: bool = False
+    ) -> None:
         super().__init__()
         self._stream = stream if stream is not None else sys.stdout
         self._show_partials = show_partials
+        self._show_language = show_language
         self._partial_open = False
 
     def _on_stop(self, timeout: float | None) -> None:
@@ -43,7 +46,8 @@ class ConsoleRenderer(SubtitleRenderer):
         if self._partial_open:
             self._stream.write("\r\033[K")
             self._partial_open = False
-        self._stream.write(f"▸ {cue.text}\n")
+        prefix = f"[{cue.target_language}] " if self._show_language and cue.target_language else ""
+        self._stream.write(f"▸ {prefix}{cue.text}\n")
         self._stream.flush()
 
     def clear(self) -> None:

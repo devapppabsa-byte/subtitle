@@ -1,0 +1,29 @@
+{
+  "log_level": "INFO",
+  "audio": {
+    "source": "wav",
+    "sample_rate": 16000,
+    "chunk_duration": 0.5,
+    "realtime": false
+  },
+  "speech": {
+    "engine": "groq",
+    "model": "whisper-large-v3-turbo",
+    "language": null,
+    "emit_partials": false,
+    "api_key_env": "GROQ_API_KEY"
+  },
+  "translation": {
+    "engine": "groq",
+    "model": "openai/gpt-oss-20b",
+    "source_language": "auto",
+    "target_language": "es",
+    "target_languages": ["es", "fr", "de"],
+    "translate_partials": false,
+    "api_key_env": "GROQ_API_KEY"
+  },
+  "overlay": {
+    "renderer": "console",
+    "show_partials": false
+  }
+}

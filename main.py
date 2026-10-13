@@ -37,9 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speech-engine", help="Motor de reconocimiento de voz (scripted, groq).")
     parser.add_argument("--speech-model", help="Modelo de voz (groq: whisper-large-v3-turbo).")
     parser.add_argument("--speech-language", help="Idioma ISO o 'auto' para autodetectar.")
-    parser.add_argument("--translation-engine", help="Motor de traducción.")
+    parser.add_argument("--translation-engine", help="Motor de traducción (passthrough, mapping, groq).")
+    parser.add_argument("--translation-model", help="Modelo de traducción (groq: openai/gpt-oss-20b).")
     parser.add_argument("--source-language", help="Idioma de origen ('auto' para detectar).")
-    parser.add_argument("--target-language", help="Idioma de destino.")
+    parser.add_argument("--target-language", help="Idioma de destino (uno solo).")
+    parser.add_argument(
+        "--target-languages",
+        help="Varios destinos separados por coma del mismo fragmento (p. ej. es,fr,de).",
+    )
     parser.add_argument("--renderer", choices=["console", "qt"], help="Dónde mostrar los subtítulos.")
     parser.add_argument("--log-level", help="DEBUG, INFO, WARNING, ERROR.")
     return parser
@@ -63,10 +68,16 @@ def apply_cli_overrides(settings: AppSettings, args: argparse.Namespace) -> None
         settings.speech.language = None if args.speech_language == "auto" else args.speech_language
     if args.translation_engine is not None:
         settings.translation.engine = args.translation_engine
+    if args.translation_model is not None:
+        settings.translation.model = args.translation_model
     if args.source_language is not None:
         settings.translation.source_language = args.source_language
     if args.target_language is not None:
         settings.translation.target_language = args.target_language
+    if args.target_languages is not None:
+        settings.translation.target_languages = [
+            part.strip() for part in args.target_languages.split(",") if part.strip()
+        ]
     if args.renderer is not None:
         settings.overlay.renderer = args.renderer
     if args.log_level is not None:
@@ -108,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         settings.translation.engine,
         settings.overlay.renderer,
         settings.translation.source_language,
-        settings.translation.target_language,
+        ",".join(settings.translation.target_languages)
+        or settings.translation.target_language,
     )
 
     pipeline = build_pipeline(settings)

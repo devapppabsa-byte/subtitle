@@ -71,10 +71,18 @@ class TranslationSettings:
     """Motor de traducción."""
 
     engine: str = "passthrough"
-    """``passthrough`` | ``mapping`` | ``nllb`` | ``deepl`` | ``openai``."""
+    """``passthrough`` | ``mapping`` | ``groq`` | ``nllb`` | ``deepl`` | ``openai``."""
+
+    model: str = ""
+    """Modelo del motor (Groq: ``openai/gpt-oss-20b`` por defecto si está vacío)."""
 
     source_language: str = "auto"
     target_language: str = "en"
+    """Destino único (compatibilidad); si ``target_languages`` no está vacío, manda esa lista."""
+
+    target_languages: list[str] = field(default_factory=list)
+    """Varios destinos del MISMO fragmento (p. ej. ``["es", "fr", "de"]``)."""
+
     translate_partials: bool = False
     api_key_env: str | None = None
 
@@ -176,8 +184,10 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "SPEECH_MODEL": ("speech", "model"),
     "SPEECH_LANGUAGE": ("speech", "language"),
     "TRANSLATION_ENGINE": ("translation", "engine"),
+    "TRANSLATION_MODEL": ("translation", "model"),
     "SOURCE_LANGUAGE": ("translation", "source_language"),
     "TARGET_LANGUAGE": ("translation", "target_language"),
+    "TARGET_LANGUAGES": ("translation", "target_languages"),
     "OVERLAY_RENDERER": ("overlay", "renderer"),
 }
 
@@ -200,6 +210,13 @@ def load_settings(
         if value is None or value == "":
             continue
         target = getattr(settings, section)
+        if attribute == "target_languages":
+            setattr(
+                target,
+                attribute,
+                [part.strip() for part in value.split(",") if part.strip()],
+            )
+            continue
         current = getattr(target, attribute)
         setattr(target, attribute, type(current)(value) if current is not None else value)
 

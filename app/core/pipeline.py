@@ -58,6 +58,7 @@ class SubtitlePipeline:
         translator: Translator,
         source_language: str = "auto",
         target_language: str = "es",
+        target_languages: list[str] | tuple[str, ...] | None = None,
         translate_partials: bool = False,
         emit_partial_cues: bool = True,
         read_timeout: float = 0.1,
@@ -67,6 +68,9 @@ class SubtitlePipeline:
         self._translator = translator
         self._source_language = source_language
         self._target_language = target_language
+        multi = [t for t in (target_languages or []) if t.strip()]
+        #: Destinos del MISMO fragmento; uno solo por compatibilidad.
+        self._target_languages = multi or [target_language]
         self._translate_partials = translate_partials
         self._emit_partial_cues = emit_partial_cues
         self._read_timeout = read_timeout
@@ -91,6 +95,11 @@ class SubtitlePipeline:
     @property
     def translator(self) -> Translator:
         return self._translator
+
+    @property
+    def target_languages(self) -> list[str]:
+        """Destinos configurados (uno o varios del mismo fragmento)."""
+        return list(self._target_languages)
 
     # -- ciclo de vida ----------------------------------------------------
     def start(self) -> None:
@@ -252,18 +261,46 @@ class SubtitlePipeline:
             )
 
     def _emit_translated(self, job: _TranslationJob) -> None:
-        text = job.result.text
-        source_language = job.result.language
+        if len(self._target_languages) == 1:
+            self._emit_single(job, self._target_languages[0], job.cue_id)
+            return
         try:
-            translation = self._translator.translate(
-                job.result.text, self._source_language, self._target_language
+            translated = self._translator.translate_many(
+                job.result.text, self._source_language, self._target_languages
             )
-            text = translation.translated_text
-            source_language = translation.source_language
+        except Exception:
+            logger.exception("el fan-out de traducción falló; se muestra el original")
+            translated = {}
+        for target in self._target_languages:
+            result = translated.get(target)
+            if result is None:
+                try:
+                    result = self._translator.translate(job.result.text, self._source_language, target)
+                except Exception:
+                    logger.exception("traducción a %s falló; se muestra el original", target)
+                    result = None
+            self._emit_result(job, target, f"{job.cue_id}:{target}", result)
+
+    def _emit_single(self, job: _TranslationJob, target: str, cue_id: str) -> None:
+        try:
+            result = self._translator.translate(job.result.text, self._source_language, target)
         except Exception:
             logger.exception("la traducción falló; se muestra el texto original")
+            result = None
+        self._emit_result(job, target, cue_id, result)
+
+    def _emit_result(self, job: _TranslationJob, target: str, cue_id: str, result) -> None:
+        if result is None:
+            text: str = job.result.text
+            source_language = job.result.language
+        else:
+            text = result.translated_text
+            source_language = result.source_language
         self.cues.put(
-            self._build_cue(job.cue_id, job.result, text=text, is_final=job.is_final, source_language=source_language)
+            self._build_cue(
+                cue_id, job.result, text=text, is_final=job.is_final,
+                source_language=source_language, target_language=target,
+            )
         )
 
     def _build_cue(
@@ -274,6 +311,7 @@ class SubtitlePipeline:
         text: str,
         is_final: bool,
         source_language: str | None,
+        target_language: str | None = None,
     ) -> SubtitleCue:
         return SubtitleCue(
             cue_id=cue_id,
@@ -283,5 +321,5 @@ class SubtitlePipeline:
             end_time=result.end_time,
             source_text=result.text,
             source_language=source_language or result.language or self._source_language,
-            target_language=self._target_language,
+            target_language=target_language or self._target_language,
         )

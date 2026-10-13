@@ -102,6 +102,19 @@ def build_translator(settings: AppSettings) -> Translator:
             source_language="en",
             target_language=translation.target_language,
         )
+    if translation.engine == "groq":
+        import os
+
+        from app.translation.groq import DEFAULT_MODEL, GroqTranslator
+
+        key_env = translation.api_key_env or "GROQ_API_KEY"
+        api_key = os.environ.get(key_env)
+        if not api_key:
+            raise ConfigurationError(
+                f"Falta la clave de Groq: exportá {key_env} o configurá translation.api_key_env."
+            )
+        model = translation.model.strip() or DEFAULT_MODEL
+        return GroqTranslator(api_key=api_key, model=model)
     raise ConfigurationError(
         f"Motor de traducción '{translation.engine}' no implementado todavía. "
         "Implementá Translator en app/translation/ y registralo aquí."
@@ -110,8 +123,9 @@ def build_translator(settings: AppSettings) -> Translator:
 
 def build_renderer(settings: AppSettings) -> SubtitleRenderer:
     overlay = settings.overlay
+    multi = len([t for t in settings.translation.target_languages if t.strip()]) > 1
     if overlay.renderer == "console":
-        return ConsoleRenderer(show_partials=overlay.show_partials)
+        return ConsoleRenderer(show_partials=overlay.show_partials, show_language=multi)
     if overlay.renderer == "qt":
         from app.overlay.qt_overlay import QtOverlayRenderer
 
@@ -120,12 +134,14 @@ def build_renderer(settings: AppSettings) -> SubtitleRenderer:
 
 
 def build_pipeline(settings: AppSettings) -> SubtitlePipeline:
+    targets = [t for t in settings.translation.target_languages if t.strip()]
     return SubtitlePipeline(
         audio_source=build_audio_source(settings),
         recognizer=build_recognizer(settings),
         translator=build_translator(settings),
         source_language=settings.translation.source_language,
         target_language=settings.translation.target_language,
+        target_languages=targets or None,
         translate_partials=settings.translation.translate_partials,
         emit_partial_cues=settings.overlay.show_partials,
     )
