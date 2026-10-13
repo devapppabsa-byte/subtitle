@@ -43,7 +43,7 @@ class PipelineBridge(QObject):
     def __init__(
         self,
         pipeline: "SubtitlePipeline",
-        renderer: "SubtitleRenderer",
+        renderer: "SubtitleRenderer | None" = None,
         *,
         poll_ms: int = 100,
         parent=None,
@@ -51,6 +51,7 @@ class PipelineBridge(QObject):
         super().__init__(parent)
         self._pipeline = pipeline
         self._renderer = renderer
+        self._router = None
         self._timer = QTimer(self)
         self._timer.setInterval(max(10, poll_ms))
         self._timer.timeout.connect(self._drain)
@@ -60,17 +61,27 @@ class PipelineBridge(QObject):
         self._stale_ignored = 0
 
     # -- slots públicos (hilo GUI) --------------------------------------
+    def set_router(self, router) -> None:
+        """Registra un enrutador ``cue -> None`` (p. ej. MainWindow por idioma).
+
+        Si hay router, ``_on_cue`` lo invoca en vez del renderizador único.
+        """
+
+        self._router = router
+
     def start(self) -> None:
         """Arranca pipeline, renderizador y bombeo (``start_pipeline``)."""
         self._pipeline.start()
-        self._renderer.start()
+        if self._renderer is not None:
+            self._renderer.start()
         self._timer.start()
 
     def stop(self) -> None:
         """Detiene bombeo, pipeline y renderizador (``stop_pipeline``)."""
         self._timer.stop()
         self._pipeline.stop()
-        self._renderer.stop()
+        if self._renderer is not None:
+            self._renderer.stop()
 
     @property
     def stale_ignored(self) -> int:
@@ -97,7 +108,10 @@ class PipelineBridge(QObject):
             self.cueReceived.emit(event)
 
     def _on_cue(self, cue: "SubtitleCue") -> None:
-        self._renderer.render(cue)
+        if self._router is not None:
+            self._router(cue)
+        elif self._renderer is not None:
+            self._renderer.render(cue)
 
     def _on_finished(self, reason: str) -> None:
         self._timer.stop()

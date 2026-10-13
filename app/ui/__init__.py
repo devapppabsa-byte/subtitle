@@ -15,5 +15,19 @@ slots, sin red en la UI.
 """
 
 from app.ui.bridge import PipelineBridge
+from app.ui.main_window import MainWindow
+from app.ui.settings_dialog import SettingsDialog
+from app.ui.styles import badge_stylesheet, button_stylesheet, subtitle_stylesheet
+from app.ui.subtitle_window import ORIGINAL_KEY, SubtitleWindow, create_subtitle_window
 
-__all__ = ["PipelineBridge"]
+__all__ = [
+    "PipelineBridge",
+    "MainWindow",
+    "SettingsDialog",
+    "SubtitleWindow",
+    "ORIGINAL_KEY",
+    "create_subtitle_window",
+    "subtitle_stylesheet",
+    "badge_stylesheet",
+    "button_stylesheet",
+]

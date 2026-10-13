@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = build_pipeline(settings)
     renderer = build_renderer(settings)
     if settings.overlay.renderer == "qt":
-        return _run_qt(pipeline, renderer, timeout=args.duration)
+        return _run_qt(pipeline, settings, timeout=args.duration)
     try:
         with renderer:
             pipeline.run(renderer, timeout=args.duration)
@@ -135,16 +135,20 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _run_qt(pipeline, renderer, timeout: float | None) -> int:
-    """Bucle Qt real: bridge con señales en el hilo GUI, sin red en la UI."""
+def _run_qt(pipeline, settings, timeout: float | None) -> int:
+    """Panel principal + ventanas por idioma (Fase 6), sin red en la UI."""
     from PySide6.QtWidgets import QApplication
 
     from app.ui.bridge import PipelineBridge
+    from app.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
-    bridge = PipelineBridge(pipeline, renderer)
+    app.setOrganizationName("subtitle-app")
+    app.setApplicationName("subtitle-app")
+    bridge = PipelineBridge(pipeline, None)
+    window = MainWindow(settings, pipeline, bridge)
+    window.show()
     bridge.finished.connect(app.quit)
-    bridge.start()
     if timeout is not None:
         from PySide6.QtCore import QTimer
 
@@ -154,7 +158,15 @@ def _run_qt(pipeline, renderer, timeout: float | None) -> int:
     except KeyboardInterrupt:
         logger.info("interrumpido por el usuario")
     finally:
-        bridge.stop()
+        try:
+            bridge.stop()
+        except Exception:
+            logger.exception("fallo al detener el bridge Qt")
+        for child in window.windows.values():
+            try:
+                child.save_window_geometry()
+            except Exception:
+                pass
     return 0
 
 
