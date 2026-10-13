@@ -24,8 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", help="Ruta a un archivo JSON de configuración.")
     parser.add_argument("--duration", type=float, default=None, help="Segundos de ejecución (por defecto: hasta que termine el audio).")
-    parser.add_argument("--audio", choices=["synthetic", "wav", "microphone"], help="Origen de audio.")
+    parser.add_argument("--audio", choices=["synthetic", "wav", "microphone", "monitor"], help="Origen de audio.")
     parser.add_argument("--audio-path", help="Ruta del WAV cuando --audio=wav.")
+    parser.add_argument("--audio-device", help="Índice o parte del nombre (None = auto).")
+    parser.add_argument("--list-devices", action="store_true", help="Lista dispositivos y monitores, luego sale.")
     parser.add_argument(
         "--realtime",
         action=argparse.BooleanOptionalAction,
@@ -47,6 +49,8 @@ def apply_cli_overrides(settings: AppSettings, args: argparse.Namespace) -> None
         settings.audio.source = args.audio
     if args.audio_path is not None:
         settings.audio.path = args.audio_path
+    if args.audio_device is not None:
+        settings.audio.device = args.audio_device
     if args.realtime is not None:
         settings.audio.realtime = args.realtime
     if args.speech_engine is not None:
@@ -65,6 +69,28 @@ def apply_cli_overrides(settings: AppSettings, args: argparse.Namespace) -> None
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.list_devices:
+        from app.audio.capture import find_monitor_devices, list_audio_devices
+
+        devices = list_audio_devices()
+        print(f"{'IDX':>3}  {'KIND':<10} IN/OUT  RATE      FLAGS  NAME")
+        for dev in devices:
+            flags = "".join(
+                [
+                    "M" if dev.is_monitor else "-",
+                    "D" if dev.is_default else "-",
+                ]
+            )
+            print(
+                f"{dev.index:>3}  {dev.kind:<10} {dev.channels_in:>2}/{dev.channels_out:<2}  "
+                f"{dev.default_rate:>7.0f}Hz  {flags}     {dev.name}"
+                + (f"  [{dev.pactl_name}]" if dev.pactl_name else "")
+            )
+        monitors = find_monitor_devices(devices)
+        print(f"\nMonitores del sistema: {len(monitors)}")
+        for mon in monitors:
+            print(f"  #{mon.index} {mon.name}")
+        return 0
     settings = load_settings(args.config)
     apply_cli_overrides(settings, args)
     configure_logging(settings.log_level)

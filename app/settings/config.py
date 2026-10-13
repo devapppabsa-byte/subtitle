@@ -33,9 +33,10 @@ class AudioSettings:
     """De dónde sale el audio y cómo se captura."""
 
     source: str = "synthetic"
-    """``synthetic`` | ``wav`` | ``microphone``."""
+    """``synthetic`` | ``wav`` | ``microphone`` | ``monitor``."""
 
     device: str | None = None
+    """Índice, subcadena del nombre o None (auto: monitor preferido / entrada por defecto)."""
     path: str | None = None
     """Ruta del WAV cuando ``source == "wav"``."""
 

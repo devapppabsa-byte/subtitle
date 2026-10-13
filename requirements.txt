@@ -4,14 +4,16 @@ numpy>=1.26
 # --- UI (Fase 1) -------------------------------------------------------------
 PySide6>=6.6
 
+# --- Audio en vivo (Fase 2) ----------------------------------------------------
+sounddevice>=0.4
+
 # --- Desarrollo --------------------------------------------------------------
 pytest>=7.4
 pytest-timeout>=2.2
 
 # --- Opcionales: se instalan a medida que cada fase los necesita -------------
 # Overlay de escritorio (Fase de UI): ya instalado en Fase 1
-# Captura de micrófono / audio del sistema (Fase de audio real):
-#   sounddevice>=0.4
+# Captura de micrófono / audio del sistema (Fase 2): ya instalada arriba
 # Reconocimiento de voz local (Fase de voz):
 #   faster-whisper>=1.0
 # Reconocimiento de voz en la nube (Fase de voz):

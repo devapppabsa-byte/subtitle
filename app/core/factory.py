@@ -8,6 +8,7 @@ consiste en un ``elif`` en esta función, sin tocar el pipeline ni la UI.
 from __future__ import annotations
 
 from app.audio.base import AudioSource
+from app.audio.capture import MicrophoneAudioSource, SystemAudioSource
 from app.audio.synthetic import SyntheticAudioSource
 from app.audio.wav import WavFileAudioSource
 from app.core.errors import ConfigurationError
@@ -42,10 +43,17 @@ def build_audio_source(settings: AppSettings) -> AudioSource:
         if not audio.path:
             raise ConfigurationError("audio.path es obligatorio para la fuente 'wav'")
         return WavFileAudioSource(audio.path, chunk_duration=audio.chunk_duration, realtime=audio.realtime)
+    if audio.source == "monitor":
+        return SystemAudioSource(
+            audio.device,
+            target_rate=audio.sample_rate,
+            chunk_duration=audio.chunk_duration,
+        )
     if audio.source == "microphone":
-        raise ConfigurationError(
-            "La fuente 'microphone' se implementa en una fase posterior "
-            "(sounddevice + PortAudio). Configurá 'synthetic' o 'wav'."
+        return MicrophoneAudioSource(
+            audio.device,
+            target_rate=audio.sample_rate,
+            chunk_duration=audio.chunk_duration,
         )
     raise ConfigurationError(f"Origen de audio desconocido: {audio.source!r}")
 
