@@ -8,4 +8,12 @@ En Fase 0 este paquete solo fija el límite arquitectónico: la UI consume
 eventos del pipeline (``SubtitlePipeline.cues``) y dibuja a través de
 ``SubtitleRenderer``; nunca habla directamente con los motores de audio, voz o
 traducción.
+
+En Fase 5 el :class:`app.ui.bridge.PipelineBridge` drena la cola con un
+``QTimer`` en el hilo GUI y reemite señales; las ventanas se actualizan en
+slots, sin red en la UI.
 """
+
+from app.ui.bridge import PipelineBridge
+
+__all__ = ["PipelineBridge"]

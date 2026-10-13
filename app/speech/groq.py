@@ -21,7 +21,7 @@ import threading
 import time
 import wave
 from dataclasses import dataclass
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import Any
 
 import numpy as np
@@ -242,14 +242,15 @@ class GroqSpeechRecognizer(SpeechRecognizer):
         self._min_seconds = float(min_seconds)
         self._request_timeout = float(request_timeout)
         self._client = client
-        self._results: Queue[RecognitionResult] = Queue()
-        self._jobs: Queue[_TranscriptionJob | object] = Queue()
+        self._results: Queue[RecognitionResult] = Queue(maxsize=32)
+        self._jobs: Queue[_TranscriptionJob | object] = Queue(maxsize=8)
         self._worker: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._sample_rate = 16_000
         self._buffer = np.zeros(0, dtype=np.float32)
         self._buffer_start = 0.0
         self._stream_time = 0.0
+        self._dropped_windows = 0
         self._lock = threading.Lock()
 
     # -- SpeechRecognizer -------------------------------------------------
@@ -281,7 +282,20 @@ class GroqSpeechRecognizer(SpeechRecognizer):
                 )
                 self._buffer = np.zeros(0, dtype=np.float32)
         if job is not None:
-            self._jobs.put(job)
+            try:
+                self._jobs.put_nowait(job)
+            except Full:
+                # API lenta y audio continuo: se descarta la ventana más vieja.
+                try:
+                    self._jobs.get_nowait()
+                except Empty:
+                    pass
+                self._dropped_windows += 1
+                logger.warning("ventana de voz descartada por backpressure")
+                try:
+                    self._jobs.put_nowait(job)
+                except Full:  # pragma: no cover - carrera extrema
+                    pass
 
     def flush(self) -> None:
         with self._lock:

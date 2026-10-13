@@ -125,11 +125,36 @@ def main(argv: list[str] | None = None) -> int:
 
     pipeline = build_pipeline(settings)
     renderer = build_renderer(settings)
+    if settings.overlay.renderer == "qt":
+        return _run_qt(pipeline, renderer, timeout=args.duration)
     try:
         with renderer:
             pipeline.run(renderer, timeout=args.duration)
     except KeyboardInterrupt:
         logger.info("interrumpido por el usuario")
+    return 0
+
+
+def _run_qt(pipeline, renderer, timeout: float | None) -> int:
+    """Bucle Qt real: bridge con señales en el hilo GUI, sin red en la UI."""
+    from PySide6.QtWidgets import QApplication
+
+    from app.ui.bridge import PipelineBridge
+
+    app = QApplication.instance() or QApplication([])
+    bridge = PipelineBridge(pipeline, renderer)
+    bridge.finished.connect(app.quit)
+    bridge.start()
+    if timeout is not None:
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(int(timeout * 1000), app.quit)
+    try:
+        app.exec()
+    except KeyboardInterrupt:
+        logger.info("interrumpido por el usuario")
+    finally:
+        bridge.stop()
     return 0
 
 

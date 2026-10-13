@@ -4,9 +4,9 @@ Adaptador de ``SubtitleRenderer`` para escritorio. Qt se importa de forma
 perezosa para que el núcleo de la aplicación funcione sin dependencias
 gráficas instaladas (servidores, CI, tests).
 
-Nota de integración: esta versión se bombea con ``processEvents`` desde el
-bucle principal, que es donde el pipeline invoca ``render``. Fases posteriores
-moverán la aplicación a un ``QApplication.exec()`` real con panel de control.
+Nota de integración: se usa con ``QApplication.exec()`` real y el
+:class:`app.ui.bridge.PipelineBridge`, que invoca ``render`` en el hilo GUI.
+El modo consola sigue disponible con ``ConsoleRenderer``.
 """
 
 from __future__ import annotations
@@ -76,17 +76,17 @@ class QtOverlayRenderer(SubtitleRenderer):
         self._label = None
 
     def render(self, cue: SubtitleCue) -> None:
+        # Fase 5: sin processEvents; el bombeo lo hace el event loop real y el
+        # bridge garantiza que esto corre en el hilo GUI.
         if self._window is None or self._label is None:
             raise RenderError("El overlay Qt no está iniciado")
         self._label.setText(cue.text)
         self._window.adjustSize()
         self._reposition(self._window, self._app.primaryScreen().availableGeometry())
-        self._app.processEvents()
 
     def clear(self) -> None:
         if self._label is not None:
             self._label.setText("")
-            self._app.processEvents()
 
     # -- helpers ----------------------------------------------------------
     def _reposition(self, window, geometry) -> None:

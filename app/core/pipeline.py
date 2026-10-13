@@ -1,16 +1,20 @@
 """Orquestador del pipeline: audio → voz → traducción → subtítulos.
 
-Modelo de concurrencia (decisión de Fase 0): **hilos + colas**.
+Modelo de concurrencia (decisión de Fase 0, endurecido en Fase 5): **hilos + colas ACOTADAS**.
 
-* *capture thread* — lee de la ``AudioSource`` y alimenta el reconocedor.
-* *dispatch thread* — consume resultados del reconocedor, asigna un
-  ``cue_id`` a cada enunciado y decide qué se muestra ya y qué se traduce.
-* *translation thread* — traduce los enunciados finales sin bloquear las
-  etapas anteriores.
+* *capture thread* — lee de la ``AudioSource`` y la entrega vía :meth:`submit`
+  (``submit_audio_chunk``); nunca bloquea.
+* *dispatch thread* — ``handle_transcription`` consume resultados del
+  reconocedor, asigna un ``cue_id`` y descarta parciales obsoletos (stale) de
+  cues ya finalizadas.
+* *translation thread* — ``schedule_translations`` traduce finales (uno o
+  varios idiomas) sin bloquear las etapas anteriores.
+
+Colas acotadas con política *drop-oldest*: ante una racha lenta de red se
+descarta lo más viejo (fresco > completo en vivo) y se cuenta en :meth:`stats`.
 
 El pipeline **no** llama al renderizador: publica eventos en ``cues`` y el
-hilo principal los dibuja. Esa frontera es lo que mantiene a Qt (y a cualquier
-UI) fuera de los hilos de trabajo.
+hilo principal (o el bridge Qt) los dibuja. La UI nunca hace red.
 """
 
 from __future__ import annotations
@@ -18,9 +22,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 
 from app.audio.base import AudioSource
+from app.audio.models import AudioChunk
 from app.core.events import PipelineEvent, PipelineFinished
 from app.core.logging import get_logger
 from app.speech.base import SpeechRecognizer
@@ -29,7 +34,12 @@ from app.subtitles.base import SubtitleRenderer
 from app.subtitles.models import SubtitleCue
 from app.translation.base import Translator
 
-__all__ = ["SubtitlePipeline"]
+__all__ = [
+    "SubtitlePipeline",
+    "start_pipeline",
+    "submit_audio_chunk",
+    "stop_pipeline",
+]
 
 logger = get_logger(__name__)
 
@@ -62,6 +72,8 @@ class SubtitlePipeline:
         translate_partials: bool = False,
         emit_partial_cues: bool = True,
         read_timeout: float = 0.1,
+        max_cues: int = 64,
+        max_translation_jobs: int = 16,
     ) -> None:
         self._source = audio_source
         self._recognizer = recognizer
@@ -76,12 +88,20 @@ class SubtitlePipeline:
         self._read_timeout = read_timeout
 
         #: Eventos para la capa de presentación (``SubtitleCue`` o ``PipelineFinished``).
-        self.cues: Queue[PipelineEvent] = Queue()
-        self._translation_jobs: Queue[_TranslationJob | object] = Queue()
+        #: Cola ACOTADA: llena → se descarta lo más viejo (ver ``_publish``).
+        self.cues: Queue[PipelineEvent] = Queue(maxsize=max(1, max_cues))
+        self._translation_jobs: Queue[_TranslationJob | object] = Queue(
+            maxsize=max(1, max_translation_jobs)
+        )
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
         self._started = False
         self._cue_index = 0
+        self._finalized: set[str] = set()
+        self._stats_lock = threading.Lock()
+        self._dropped_cues = 0
+        self._dropped_translations = 0
+        self._stale_partials = 0
 
     # -- acceso a las dependencias ---------------------------------------
     @property
@@ -101,9 +121,46 @@ class SubtitlePipeline:
         """Destinos configurados (uno o varios del mismo fragmento)."""
         return list(self._target_languages)
 
+    def stats(self) -> dict:
+        """Foto de backpressure: pendientes, descartes y progreso."""
+        with self._stats_lock:
+            dropped_cues = self._dropped_cues
+            dropped_translations = self._dropped_translations
+            stale_partials = self._stale_partials
+        return {
+            "running": self._started,
+            "pending_cues": self.cues.qsize(),
+            "pending_translations": self._translation_jobs.qsize(),
+            "dropped_cues": dropped_cues,
+            "dropped_translations": dropped_translations,
+            "stale_partials_dropped": stale_partials,
+            "cues_emitted": self._cue_index,
+        }
+
+    # -- API de Fase 5 (especificación) -------------------------------------
+    def submit(self, chunk: AudioChunk) -> None:
+        """``submit_audio_chunk``: entrega audio al reconocedor sin bloquear."""
+        self._recognizer.feed(chunk)
+
+    def handle_transcription(self, result: RecognitionResult) -> str | None:
+        """``handle_transcription``: distribuye el texto original.
+
+        Devuelve el ``cue_id`` asignado, o ``None`` si el parcial llegó tarde
+        (su cue ya se finalizó) y se descartó.
+        """
+        return self._handle_result(result)
+
+    def schedule_translations(self, cue_id: str, result: RecognitionResult, *, is_final: bool) -> bool:
+        """``schedule_translations``: encola la traducción del fragmento.
+
+        Devuelve ``False`` si la cola estaba llena y se descartó lo más viejo
+        para hacer sitio (el descarte queda en ``stats()``).
+        """
+        return self._enqueue_translation(_TranslationJob(cue_id, result, is_final=is_final))
+
     # -- ciclo de vida ----------------------------------------------------
     def start(self) -> None:
-        """Arranca etapas e hilos de trabajo. Idempotente."""
+        """Arranca etapas e hilos de trabajo. Idempotente (``start_pipeline``)."""
         if self._started:
             return
         self._source.start()
@@ -113,6 +170,7 @@ class SubtitlePipeline:
 
         self._stop_event.clear()
         self._cue_index = 0
+        self._finalized = set()
         self._threads = [
             self._spawn(self._capture_loop, "pipeline-capture"),
             self._spawn(self._dispatch_loop, "pipeline-dispatch"),
@@ -127,7 +185,7 @@ class SubtitlePipeline:
         )
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Detiene todo de forma ordenada y espera a los hilos. Idempotente."""
+        """Detiene todo de forma ordenada y espera a los hilos (``stop_pipeline``)."""
         if not self._started:
             return
         self._stop_event.set()
@@ -208,7 +266,7 @@ class SubtitlePipeline:
                         logger.info("fuente de audio agotada")
                         break
                     continue
-                self._recognizer.feed(chunk)
+                self.submit(chunk)
         except Exception:
             logger.exception("el hilo de captura falló")
         finally:
@@ -230,10 +288,10 @@ class SubtitlePipeline:
             if item is _SENTINEL:
                 break
             try:
-                self._handle_result(item)
+                self.handle_transcription(item)
             except Exception:  # pragma: no cover - defensivo
                 logger.exception("fallo al procesar un resultado de voz")
-        self._translation_jobs.put(_SENTINEL)
+        self._enqueue_translation(_SENTINEL)
 
     def _translation_loop(self) -> None:
         while True:
@@ -241,24 +299,70 @@ class SubtitlePipeline:
             if job is _SENTINEL:
                 break
             self._emit_translated(job)
-        self.cues.put(PipelineFinished())
+        self._publish(PipelineFinished())
+
+    # -- colas acotadas ---------------------------------------------------
+    def _publish(self, event: PipelineEvent) -> None:
+        """Publica en ``cues``; llena → descarta lo más viejo y cuenta."""
+        try:
+            self.cues.put_nowait(event)
+        except Full:
+            try:
+                self.cues.get_nowait()
+            except Empty:
+                pass
+            with self._stats_lock:
+                self._dropped_cues += 1
+            try:
+                self.cues.put_nowait(event)
+            except Full:  # pragma: no cover - carrera extrema
+                pass
+
+    def _enqueue_translation(self, job: _TranslationJob | object) -> bool:
+        """Encola trabajo de traducción; llena → descarta lo más viejo.
+
+        Devuelve ``True`` si hubo que descartar para hacer sitio.
+        """
+        try:
+            self._translation_jobs.put_nowait(job)
+            return False
+        except Full:
+            try:
+                self._translation_jobs.get_nowait()
+            except Empty:
+                pass
+            with self._stats_lock:
+                self._dropped_translations += 1
+            try:
+                self._translation_jobs.put_nowait(job)
+            except Full:  # pragma: no cover - carrera extrema
+                pass
+            return True
 
     # -- lógica de negocio ------------------------------------------------
-    def _handle_result(self, result: RecognitionResult) -> None:
+    def _handle_result(self, result: RecognitionResult) -> str | None:
         cue_id = f"u{self._cue_index}"
         if result.is_final:
-            self._translation_jobs.put(_TranslationJob(cue_id, result, is_final=True))
+            self._finalized.add(cue_id)
+            self.schedule_translations(cue_id, result, is_final=True)
             self._cue_index += 1
-            return
+            return cue_id
 
+        if cue_id in self._finalized:
+            # Parcial tardío: su cue ya se publicó como final, no debe pisarla.
+            with self._stats_lock:
+                self._stale_partials += 1
+            logger.debug("parcial obsoleto descartado (%s)", cue_id)
+            return None
         if not self._emit_partial_cues:
-            return
+            return None
         if self._translate_partials:
-            self._translation_jobs.put(_TranslationJob(cue_id, result, is_final=False))
-        else:
-            self.cues.put(
-                self._build_cue(cue_id, result, text=result.text, is_final=False, source_language=None)
-            )
+            self.schedule_translations(cue_id, result, is_final=False)
+            return cue_id
+        self._publish(
+            self._build_cue(cue_id, result, text=result.text, is_final=False, source_language=None)
+        )
+        return cue_id
 
     def _emit_translated(self, job: _TranslationJob) -> None:
         if len(self._target_languages) == 1:
@@ -296,7 +400,7 @@ class SubtitlePipeline:
         else:
             text = result.translated_text
             source_language = result.source_language
-        self.cues.put(
+        self._publish(
             self._build_cue(
                 cue_id, job.result, text=text, is_final=job.is_final,
                 source_language=source_language, target_language=target,
@@ -323,3 +427,22 @@ class SubtitlePipeline:
             source_language=source_language or result.language or self._source_language,
             target_language=target_language or self._target_language,
         )
+
+
+# ---------------------------------------------------------------------------
+# Atajos procedurales (especificación Fase 5)
+# ---------------------------------------------------------------------------
+def start_pipeline(pipeline: "SubtitlePipeline") -> "SubtitlePipeline":
+    """Inicia el procesamiento. Equivale a :meth:`SubtitlePipeline.start`."""
+    pipeline.start()
+    return pipeline
+
+
+def submit_audio_chunk(pipeline: "SubtitlePipeline", chunk: AudioChunk) -> None:
+    """Pone audio en la cola sin bloquear. Equivale a :meth:`SubtitlePipeline.submit`."""
+    pipeline.submit(chunk)
+
+
+def stop_pipeline(pipeline: "SubtitlePipeline", timeout: float = 5.0) -> None:
+    """Cierra los procesos y libera recursos. Equivale a :meth:`SubtitlePipeline.stop`."""
+    pipeline.stop(timeout=timeout)
