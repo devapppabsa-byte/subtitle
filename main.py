@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Varios destinos separados por coma del mismo fragmento (p. ej. es,fr,de).",
     )
     parser.add_argument("--renderer", choices=["console", "qt"], help="Dónde mostrar los subtítulos.")
+    parser.add_argument("--speech-window", type=float, help="Ventana STT en segundos (groq).")
+    parser.add_argument("--speech-overlap", type=float, help="Solape entre ventanas STT (groq).")
+    parser.add_argument("--translation-parallel", action="store_true", help="Traducir destinos en paralelo.")
+    parser.add_argument("--translation-cache", type=int, help="Tamaño de la caché LRU de traducciones.")
+    parser.add_argument("--latency-log", help="Ruta JSONL para el log de latencia por tramos.")
     parser.add_argument("--log-level", help="DEBUG, INFO, WARNING, ERROR.")
     return parser
 
@@ -80,6 +85,16 @@ def apply_cli_overrides(settings: AppSettings, args: argparse.Namespace) -> None
         ]
     if args.renderer is not None:
         settings.overlay.renderer = args.renderer
+    if args.speech_window is not None:
+        settings.speech.window_seconds = args.speech_window
+    if args.speech_overlap is not None:
+        settings.speech.window_overlap_seconds = args.speech_overlap
+    if args.translation_parallel:
+        settings.translation.parallel = True
+    if args.translation_cache is not None:
+        settings.translation.cache_size = args.translation_cache
+    if args.latency_log is not None:
+        settings.latency.latency_log = args.latency_log
     if args.log_level is not None:
         settings.log_level = args.log_level
 
@@ -145,7 +160,7 @@ def _run_qt(pipeline, settings, timeout: float | None) -> int:
     app = QApplication.instance() or QApplication([])
     app.setOrganizationName("subtitle-app")
     app.setApplicationName("subtitle-app")
-    bridge = PipelineBridge(pipeline, None)
+    bridge = PipelineBridge(pipeline, None, poll_ms=settings.latency.poll_ms)
     window = MainWindow(settings, pipeline, bridge)
     window.show()
     bridge.finished.connect(app.quit)

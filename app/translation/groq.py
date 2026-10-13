@@ -15,6 +15,7 @@ Correspondencia con la especificación de Fase 4::
 from __future__ import annotations
 
 from collections import deque
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -28,6 +29,7 @@ __all__ = [
     "FALLBACK_MODEL",
     "ContextBuffer",
     "GroqTranslator",
+    "TranslationCache",
     "build_translation_prompt",
     "normalize_language",
     "preserve_context",
@@ -185,6 +187,47 @@ def _strip_outer_quotes(text: str) -> str:
     return cleaned
 
 
+class TranslationCache:
+    """LRU de traducciones por ``(texto, src, dst, modelo)`` (Fase 7).
+
+    Las frases repetidas (muletillas, intros) no vuelven a pagar API.
+    Solo se usa sin contexto activo para no falsear la coherencia.
+    """
+
+    def __init__(self, max_entries: int = 512) -> None:
+        self._max = max(0, int(max_entries))
+        self._entries: OrderedDict[tuple[str, str, str, str], TranslationResult] = OrderedDict()
+        self.hits = 0
+        self.misses = 0
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    @staticmethod
+    def _key(text: str, src: str, dst: str, model: str) -> tuple[str, str, str, str]:
+        return (" ".join(text.split()), src, dst, model)
+
+    def get(self, text: str, src: str, dst: str, model: str) -> TranslationResult | None:
+        if self._max <= 0:
+            return None
+        hit = self._entries.get(self._key(text, src, dst, model))
+        if hit is None:
+            self.misses += 1
+            return None
+        self._entries.move_to_end(self._key(text, src, dst, model))
+        self.hits += 1
+        return hit
+
+    def put(self, result: TranslationResult, model: str) -> None:
+        if self._max <= 0:
+            return
+        key = self._key(result.source_text, result.source_language, result.target_language, model)
+        self._entries[key] = result
+        self._entries.move_to_end(key)
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
+
+
 def translate_text(
     text: str,
     source_language: str,
@@ -194,8 +237,12 @@ def translate_text(
     model: str = DEFAULT_MODEL,
     context: ContextBuffer | None = None,
     timeout: float = 30.0,
+    max_retries: int = 2,
+    cache: "TranslationCache | None" = None,
 ) -> TranslationResult:
     """Traduce UN fragmento completo a UN idioma (nunca por palabra)."""
+    from app.core.retry import with_retries
+
     src = normalize_language(source_language)
     dst = normalize_language(target_language)
     if not text or not text.strip():
@@ -205,25 +252,41 @@ def translate_text(
             source_text=text, translated_text=text,
             source_language=src, target_language=dst,
         )
+    if cache is not None:
+        hit = cache.get(text, src, dst, model)
+        if hit is not None:
+            return hit
     messages = build_translation_prompt(
         text, source_language=src, target_language=dst,
         context=context.for_language(dst) if context is not None else None,
     )
+
+    def _call():
+        try:
+            return client.chat.completions.create(
+                model=model, messages=messages, temperature=0.0, timeout=timeout,
+            )
+        except Exception as exc:
+            raise TranslationError(f"Traducción Groq falló ({src}→{dst}): {exc}") from exc
+
     try:
-        response = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.0, timeout=timeout,
-        )
+        response = with_retries(_call, max_retries=max_retries, what=f"traducción {src}→{dst}")
         translated = _strip_outer_quotes(response.choices[0].message.content or "")
-    except Exception as exc:
+    except TranslationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensivo
         raise TranslationError(f"Traducción Groq falló ({src}→{dst}): {exc}") from exc
     if not translated:
         raise TranslationError(f"El modelo devolvió una traducción vacía ({src}→{dst}).")
-    if context is not None:
-        context.add(text, dst, translated)
-    return TranslationResult(
+    result = TranslationResult(
         source_text=text, translated_text=translated,
         source_language=src, target_language=dst,
     )
+    if context is not None:
+        context.add(text, dst, translated)
+    if cache is not None:
+        cache.put(result, model)
+    return result
 
 
 def translate_to_languages(
@@ -235,6 +298,8 @@ def translate_to_languages(
     model: str = DEFAULT_MODEL,
     context: ContextBuffer | None = None,
     timeout: float = 30.0,
+    max_retries: int = 2,
+    cache: "TranslationCache | None" = None,
     parallel: bool = False,
 ) -> dict[str, TranslationResult]:
     """Traduce UN fragmento a VARIOS idiomas, con fallo aislado por idioma.
@@ -254,6 +319,7 @@ def translate_to_languages(
         try:
             return dst, translate_text(
                 text, src, dst, client=client, model=model, context=context, timeout=timeout,
+                max_retries=max_retries, cache=cache,
             )
         except Exception as exc:  # cualquier fallo (red, API, SDK) queda aislado a su idioma
             logger.warning("traducción a %s falló, se usa el original: %s", dst, exc)
@@ -285,6 +351,9 @@ class GroqTranslator(Translator):
         model: str = DEFAULT_MODEL,
         context_pairs: int = 3,
         request_timeout: float = 30.0,
+        max_retries: int = 2,
+        cache_size: int = 512,
+        parallel: bool = False,
         client=None,
     ) -> None:
         super().__init__()
@@ -293,8 +362,16 @@ class GroqTranslator(Translator):
         self._model = self._preferred_model
         self._context = ContextBuffer(max_pairs=context_pairs)
         self._timeout = float(request_timeout)
+        self._max_retries = max(0, int(max_retries))
+        self._cache = TranslationCache(max_entries=cache_size)
+        self._parallel = bool(parallel)
         self._client = client
         self._verified = False
+
+    @property
+    def cache_stats(self) -> dict[str, int]:
+        """Aciertos/fallos/tamaño de la caché LRU."""
+        return {"hits": self._cache.hits, "misses": self._cache.misses, "size": len(self._cache)}
 
     @property
     def model(self) -> str:
@@ -321,6 +398,7 @@ class GroqTranslator(Translator):
             text, source_language, target_language,
             client=client, model=self._model,
             context=self._context, timeout=self._timeout,
+            max_retries=self._max_retries, cache=self._cache,
         )
 
     def translate_many(
@@ -329,12 +407,14 @@ class GroqTranslator(Translator):
         source_language: str,
         target_languages: list[str] | tuple[str, ...],
         *,
-        parallel: bool = False,
+        parallel: bool | None = None,
     ) -> dict[str, TranslationResult]:
         """Varios idiomas del MISMO fragmento original, con aislamiento por idioma."""
         client = self._ensure_client()
         return translate_to_languages(
             text, source_language, target_languages,
             client=client, model=self._model,
-            context=self._context, timeout=self._timeout, parallel=parallel,
+            context=self._context, timeout=self._timeout,
+            max_retries=self._max_retries, cache=self._cache,
+            parallel=self._parallel if parallel is None else parallel,
         )

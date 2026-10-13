@@ -79,7 +79,15 @@ def build_recognizer(settings: AppSettings) -> SpeechRecognizer:
             )
         model = speech.model if speech.model not in ("", "base") else DEFAULT_MODEL
         language = speech.language if speech.language != "auto" else None
-        return GroqSpeechRecognizer(api_key=api_key, model=model, language=language)
+        return GroqSpeechRecognizer(
+            api_key=api_key,
+            model=model,
+            language=language,
+            window_seconds=speech.window_seconds,
+            window_overlap_seconds=speech.window_overlap_seconds,
+            request_timeout=speech.request_timeout,
+            max_retries=speech.max_retries,
+        )
     raise ConfigurationError(
         f"Motor de voz '{speech.engine}' no implementado todavía. "
         "Implementá SpeechRecognizer en app/speech/ y registralo aquí."
@@ -114,7 +122,14 @@ def build_translator(settings: AppSettings) -> Translator:
                 f"Falta la clave de Groq: exportá {key_env} o configurá translation.api_key_env."
             )
         model = translation.model.strip() or DEFAULT_MODEL
-        return GroqTranslator(api_key=api_key, model=model)
+        return GroqTranslator(
+            api_key=api_key,
+            model=model,
+            request_timeout=translation.request_timeout,
+            max_retries=translation.max_retries,
+            cache_size=translation.cache_size,
+            parallel=translation.parallel,
+        )
     raise ConfigurationError(
         f"Motor de traducción '{translation.engine}' no implementado todavía. "
         "Implementá Translator en app/translation/ y registralo aquí."
@@ -134,6 +149,8 @@ def build_renderer(settings: AppSettings) -> SubtitleRenderer:
 
 
 def build_pipeline(settings: AppSettings) -> SubtitlePipeline:
+    from app.core.latency import LatencyTracker
+
     targets = [t for t in settings.translation.target_languages if t.strip()]
     return SubtitlePipeline(
         audio_source=build_audio_source(settings),
@@ -144,6 +161,7 @@ def build_pipeline(settings: AppSettings) -> SubtitlePipeline:
         target_languages=targets or None,
         translate_partials=settings.translation.translate_partials,
         emit_partial_cues=settings.overlay.show_partials,
+        latency=LatencyTracker(sink=settings.latency.latency_log),
     )
 
 

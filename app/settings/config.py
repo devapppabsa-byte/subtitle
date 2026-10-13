@@ -21,6 +21,7 @@ __all__ = [
     "SpeechSettings",
     "TranslationSettings",
     "OverlaySettings",
+    "LatencySettings",
     "AppSettings",
     "load_settings",
 ]
@@ -65,6 +66,18 @@ class SpeechSettings:
     api_key_env: str | None = None
     """Nombre de la variable de entorno con la credencial (Groq: ``GROQ_API_KEY``)."""
 
+    window_seconds: float = 8.0
+    """Ventana batch de audio para STT en la nube (Fase 7: 8s + solape)."""
+
+    window_overlap_seconds: float = 2.0
+    """Solape retenido entre ventanas para no partir palabras del borde."""
+
+    request_timeout: float = 60.0
+    """Timeout por llamada a la API de voz."""
+
+    max_retries: int = 2
+    """Reintentos ante 429/5xx/timeout antes del fallback (Fase 7)."""
+
 
 @dataclass(slots=True)
 class TranslationSettings:
@@ -86,6 +99,18 @@ class TranslationSettings:
     translate_partials: bool = False
     api_key_env: str | None = None
 
+    request_timeout: float = 30.0
+    """Timeout por idioma destino."""
+
+    max_retries: int = 2
+    """Reintentos ante 429/5xx/timeout antes de caer al original (Fase 7)."""
+
+    parallel: bool = False
+    """Traducir destinos en paralelo (solo tiers con concurrencia; ver Fase 4)."""
+
+    cache_size: int = 512
+    """Entradas LRU de (texto, src, dst, modelo); 0 desactiva (Fase 7)."""
+
 
 @dataclass(slots=True)
 class OverlaySettings:
@@ -101,6 +126,17 @@ class OverlaySettings:
 
 
 @dataclass(slots=True)
+class LatencySettings:
+    """Observabilidad y presupuesto de latencia (Fase 7)."""
+
+    latency_log: str = ""
+    """Ruta JSONL donde volcar marcas por tramo; vacío desactiva."""
+
+    poll_ms: int = 100
+    """Frecuencia de actualización del texto en la UI (bridge Qt)."""
+
+
+@dataclass(slots=True)
 class AppSettings:
     """Configuración completa, compuesta por la de cada etapa."""
 
@@ -108,6 +144,7 @@ class AppSettings:
     speech: SpeechSettings = field(default_factory=SpeechSettings)
     translation: TranslationSettings = field(default_factory=TranslationSettings)
     overlay: OverlaySettings = field(default_factory=OverlaySettings)
+    latency: LatencySettings = field(default_factory=LatencySettings)
     log_level: str = "INFO"
 
     # -- serialización ----------------------------------------------------
@@ -120,6 +157,7 @@ class AppSettings:
             speech=_build(SpeechSettings, data.get("speech")),
             translation=_build(TranslationSettings, data.get("translation")),
             overlay=_build_overlay(data.get("overlay")),
+            latency=_build(LatencySettings, data.get("latency")),
             log_level=str(data.get("log_level", cls.log_level)),
         )
 
@@ -189,6 +227,16 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "TARGET_LANGUAGE": ("translation", "target_language"),
     "TARGET_LANGUAGES": ("translation", "target_languages"),
     "OVERLAY_RENDERER": ("overlay", "renderer"),
+    "LATENCY_LOG": ("latency", "latency_log"),
+    "POLL_MS": ("latency", "poll_ms"),
+    "SPEECH_WINDOW": ("speech", "window_seconds"),
+    "SPEECH_OVERLAP": ("speech", "window_overlap_seconds"),
+    "SPEECH_TIMEOUT": ("speech", "request_timeout"),
+    "SPEECH_RETRIES": ("speech", "max_retries"),
+    "TRANSLATION_TIMEOUT": ("translation", "request_timeout"),
+    "TRANSLATION_RETRIES": ("translation", "max_retries"),
+    "TRANSLATION_PARALLEL": ("translation", "parallel"),
+    "TRANSLATION_CACHE": ("translation", "cache_size"),
 }
 
 
@@ -218,6 +266,9 @@ def load_settings(
             )
             continue
         current = getattr(target, attribute)
+        if isinstance(current, bool):
+            setattr(target, attribute, value.strip().lower() in ("1", "true", "yes", "on"))
+            continue
         setattr(target, attribute, type(current)(value) if current is not None else value)
 
     return settings

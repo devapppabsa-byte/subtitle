@@ -3,6 +3,7 @@
 from app.settings.config import (
     AppSettings,
     AudioSettings,
+    LatencySettings,
     OverlaySettings,
     SpeechSettings,
     TranslationSettings,
@@ -14,6 +15,7 @@ __all__ = [
     "AudioSettings",
     "SpeechSettings",
     "TranslationSettings",
+    "LatencySettings",
     "OverlaySettings",
     "load_settings",
 ]

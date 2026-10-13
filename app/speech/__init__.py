@@ -10,6 +10,7 @@ from app.speech.groq import (
     detect_language,
     normalize_transcription,
     process_transcription_result,
+    strip_overlap_prefix,
     transcribe_audio,
 )
 from app.speech.models import RecognitionResult, Word
@@ -25,5 +26,6 @@ __all__ = [
     "detect_language",
     "normalize_transcription",
     "process_transcription_result",
+    "strip_overlap_prefix",
     "transcribe_audio",
 ]

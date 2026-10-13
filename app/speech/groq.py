@@ -41,6 +41,7 @@ __all__ = [
     "encode_wav",
     "normalize_transcription",
     "process_transcription_result",
+    "strip_overlap_prefix",
     "transcribe_audio",
 ]
 
@@ -126,6 +127,27 @@ def detect_language(result: Any, *, fallback: str | None = None) -> str | None:
     transcribir solo para detectar el idioma duplicaría costo y latencia.
     """
     return _get(result, "language", default=None) or fallback
+
+
+def strip_overlap_prefix(text: str, previous: str, *, max_words: int = 20) -> str:
+    """Recorta el prefijo ya transcrito por el solape entre ventanas.
+
+    Busca el sufijo más largo de ``previous`` (en palabras, insensible a caso)
+    que coincida con el prefijo de ``text`` y lo elimina. Si todo ``text`` ya
+    salió, devuelve ``""`` para no duplicar cues.
+    """
+    current = text.split()
+    if not current or not previous.strip():
+        return text
+    prev = previous.split()[-max_words:]
+    lowered_prev = [w.lower() for w in prev]
+    lowered_cur = [w.lower() for w in current[:max_words]]
+    overlap = 0
+    for size in range(min(len(lowered_prev), len(lowered_cur)), 0, -1):
+        if lowered_prev[-size:] == lowered_cur[:size]:
+            overlap = size
+            break
+    return " ".join(current[overlap:]) if overlap else text
 
 
 def encode_wav(samples: np.ndarray, sample_rate: int) -> bytes:
@@ -227,20 +249,26 @@ class GroqSpeechRecognizer(SpeechRecognizer):
         model: str = DEFAULT_MODEL,
         language: str | None = None,
         window_seconds: float = 10.0,
+        window_overlap_seconds: float = 0.0,
         min_seconds: float = 3.0,
         request_timeout: float = 60.0,
+        max_retries: int = 2,
         client: Any | None = None,
     ) -> None:
         super().__init__()
         if window_seconds <= 0 or min_seconds <= 0:
             raise ConfigurationError("window_seconds y min_seconds deben ser positivos")
+        if window_overlap_seconds < 0 or window_overlap_seconds >= window_seconds:
+            raise ConfigurationError("window_overlap_seconds debe estar en [0, window_seconds)")
         self._api_key = api_key
         self._preferred_model = model or DEFAULT_MODEL
         self._model = self._preferred_model
         self._language = language
         self._window_seconds = float(window_seconds)
+        self._overlap_seconds = float(window_overlap_seconds)
         self._min_seconds = float(min_seconds)
         self._request_timeout = float(request_timeout)
+        self._max_retries = max(0, int(max_retries))
         self._client = client
         self._results: Queue[RecognitionResult] = Queue(maxsize=32)
         self._jobs: Queue[_TranscriptionJob | object] = Queue(maxsize=8)
@@ -251,6 +279,7 @@ class GroqSpeechRecognizer(SpeechRecognizer):
         self._buffer_start = 0.0
         self._stream_time = 0.0
         self._dropped_windows = 0
+        self._last_text = ""
         self._lock = threading.Lock()
 
     # -- SpeechRecognizer -------------------------------------------------
@@ -280,7 +309,13 @@ class GroqSpeechRecognizer(SpeechRecognizer):
                     start_time=self._buffer_start,
                     duration=buffered,
                 )
-                self._buffer = np.zeros(0, dtype=np.float32)
+                # Solape: se retiene la cola para no partir palabras del borde.
+                keep = int(round(self._overlap_seconds * self._sample_rate))
+                if 0 < keep < self._buffer.size:
+                    self._buffer = self._buffer[-keep:]
+                    self._buffer_start = self._buffer_start + buffered - self._overlap_seconds
+                else:
+                    self._buffer = np.zeros(0, dtype=np.float32)
         if job is not None:
             try:
                 self._jobs.put_nowait(job)
@@ -341,6 +376,8 @@ class GroqSpeechRecognizer(SpeechRecognizer):
             self._transcribe_job(job)
 
     def _transcribe_job(self, job: _TranscriptionJob) -> None:
+        from app.core.retry import with_retries
+
         try:
             wav_bytes = encode_wav(job.samples, self._sample_rate)
         except SpeechError:
@@ -348,12 +385,16 @@ class GroqSpeechRecognizer(SpeechRecognizer):
             return
         started = time.monotonic()
         try:
-            response = transcribe_audio(
-                wav_bytes,
-                client=self._client,
-                model=self._model,
-                language=self._language,
-                timeout=self._request_timeout,
+            response = with_retries(
+                lambda: transcribe_audio(
+                    wav_bytes,
+                    client=self._client,
+                    model=self._model,
+                    language=self._language,
+                    timeout=self._request_timeout,
+                ),
+                max_retries=self._max_retries,
+                what="transcripción",
             )
         except SpeechError:
             logger.exception("ventana %.1fs descartada por fallo de API", job.duration)
@@ -364,16 +405,21 @@ class GroqSpeechRecognizer(SpeechRecognizer):
         if not payload.text:
             logger.info("ventana %.1fs sin voz (%.2fs de API)", job.duration, latency)
             return
+        text = strip_overlap_prefix(payload.text, self._last_text)
+        self._last_text = payload.text
+        if not text:
+            logger.info("ventana %.1fs totalmente solapada, sin texto nuevo", job.duration)
+            return
         logger.info(
             "transcript %.1fs → %r [%s] (latencia %.2fs)",
             job.duration,
-            payload.text,
+            text,
             language,
             latency,
         )
         self._results.put(
             RecognitionResult(
-                text=payload.text,
+                text=text,
                 is_final=True,
                 start_time=job.start_time,
                 end_time=job.start_time + job.duration,

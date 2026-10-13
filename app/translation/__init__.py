@@ -8,6 +8,7 @@ from app.translation.base import Translator
 from app.translation.groq import (
     ContextBuffer,
     GroqTranslator,
+    TranslationCache,
     build_translation_prompt,
     normalize_language,
     preserve_context,
@@ -23,6 +24,7 @@ __all__ = [
     "TranslationResult",
     "ContextBuffer",
     "GroqTranslator",
+    "TranslationCache",
     "PassthroughTranslator",
     "MappingTranslator",
     "build_translation_prompt",

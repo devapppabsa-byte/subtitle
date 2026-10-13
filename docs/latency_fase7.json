@@ -1,0 +1,146 @@
+{
+  "windows": [
+    {
+      "window_s": 5.0,
+      "lang": "es",
+      "model": "whisper-large-v3-turbo",
+      "chunks": 1,
+      "total_s": 1.68,
+      "per_chunk_s": 1.68,
+      "wer": 0.167,
+      "text": " Hola mundo, los subtítulos están funcionando."
+    },
+    {
+      "window_s": 5.0,
+      "lang": "es",
+      "model": "whisper-large-v3",
+      "chunks": 1,
+      "total_s": 0.43,
+      "per_chunk_s": 0.43,
+      "wer": 0.167,
+      "text": " Hola mundo, los subtítulos están funcionando."
+    },
+    {
+      "window_s": 5.0,
+      "lang": "en",
+      "model": "whisper-large-v3-turbo",
+      "chunks": 1,
+      "total_s": 0.47,
+      "per_chunk_s": 0.47,
+      "wer": 0.167,
+      "text": " Hello world, the subtitles are working."
+    },
+    {
+      "window_s": 5.0,
+      "lang": "en",
+      "model": "whisper-large-v3",
+      "chunks": 1,
+      "total_s": 0.38,
+      "per_chunk_s": 0.38,
+      "wer": 0.167,
+      "text": " Hello world, the subtitles are working."
+    },
+    {
+      "window_s": 8.0,
+      "lang": "es",
+      "model": "whisper-large-v3-turbo",
+      "chunks": 1,
+      "total_s": 0.37,
+      "per_chunk_s": 0.37,
+      "wer": 0.167,
+      "text": " Hola mundo, los subtítulos están funcionando."
+    },
+    {
+      "window_s": 8.0,
+      "lang": "es",
+      "model": "whisper-large-v3",
+      "chunks": 1,
+      "total_s": 0.43,
+      "per_chunk_s": 0.43,
+      "wer": 0.167,
+      "text": " Hola mundo, los subtítulos están funcionando."
+    },
+    {
+      "window_s": 8.0,
+      "lang": "en",
+      "model": "whisper-large-v3-turbo",
+      "chunks": 1,
+      "total_s": 0.29,
+      "per_chunk_s": 0.29,
+      "wer": 0.167,
+      "text": " Hello world, the subtitles are working."
+    },
+    {
+      "window_s": 8.0,
+      "lang": "en",
+      "model": "whisper-large-v3",
+      "chunks": 1,
+      "total_s": 0.45,
+      "per_chunk_s": 0.45,
+      "wer": 0.167,
+      "text": " Hello world, the subtitles are working."
+    },
+    {
+      "window_s": 10.0,
+      "lang": "es",
+      "model": "whisper-large-v3-turbo",
+      "chunks": 1,
+      "total_s": 0.61,
+      "per_chunk_s": 0.61,
+      "wer": 0.167,
+      "text": " Hola mundo, los subtítulos están funcionando."
+    },
+    {
+      "window_s": 10.0,
+      "lang": "es",
+      "model": "whisper-large-v3",
+      "chunks": 1,
+      "total_s": 0.53,
+      "per_chunk_s": 0.53,
+      "wer": 0.167,
+      "text": " Hola mundo, los subtítulos están funcionando."
+    },
+    {
+      "window_s": 10.0,
+      "lang": "en",
+      "model": "whisper-large-v3-turbo",
+      "chunks": 1,
+      "total_s": 0.45,
+      "per_chunk_s": 0.45,
+      "wer": 0.167,
+      "text": " Hello world, the subtitles are working."
+    },
+    {
+      "window_s": 10.0,
+      "lang": "en",
+      "model": "whisper-large-v3",
+      "chunks": 1,
+      "total_s": 0.46,
+      "per_chunk_s": 0.46,
+      "wer": 0.167,
+      "text": " Hello world, the subtitles are working."
+    }
+  ],
+  "translation": [
+    {
+      "model": "openai/gpt-oss-20b",
+      "latency_s": 0.38,
+      "text": "Hola mundo, los subtítulos están funcionando"
+    },
+    {
+      "model": "openai/gpt-oss-120b",
+      "latency_s": 0.5,
+      "text": "hola mundo, los subtítulos están funcionando"
+    }
+  ],
+  "render_overhead_s": {
+    "dispatch->translating": {
+      "avg_s": 7.370300590991974e-05,
+      "n": 1
+    },
+    "translating->rendered": {
+      "avg_s": 1.0236981324851513e-05,
+      "n": 1
+    }
+  }
+}

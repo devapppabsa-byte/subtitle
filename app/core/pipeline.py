@@ -27,6 +27,7 @@ from queue import Empty, Full, Queue
 from app.audio.base import AudioSource
 from app.audio.models import AudioChunk
 from app.core.events import PipelineEvent, PipelineFinished
+from app.core.latency import LatencyTracker
 from app.core.logging import get_logger
 from app.speech.base import SpeechRecognizer
 from app.speech.models import RecognitionResult
@@ -74,6 +75,7 @@ class SubtitlePipeline:
         read_timeout: float = 0.1,
         max_cues: int = 64,
         max_translation_jobs: int = 16,
+        latency: LatencyTracker | None = None,
     ) -> None:
         self._source = audio_source
         self._recognizer = recognizer
@@ -98,6 +100,7 @@ class SubtitlePipeline:
         self._started = False
         self._cue_index = 0
         self._finalized: set[str] = set()
+        self._latency = latency or LatencyTracker()
         self._stats_lock = threading.Lock()
         self._dropped_cues = 0
         self._dropped_translations = 0
@@ -121,6 +124,11 @@ class SubtitlePipeline:
         """Destinos configurados (uno o varios del mismo fragmento)."""
         return list(self._target_languages)
 
+    @property
+    def latency(self) -> LatencyTracker:
+        """Medición por tramos (``dispatch->translating->rendered`` por cue)."""
+        return self._latency
+
     def stats(self) -> dict:
         """Foto de backpressure: pendientes, descartes y progreso."""
         with self._stats_lock:
@@ -135,6 +143,7 @@ class SubtitlePipeline:
             "dropped_translations": dropped_translations,
             "stale_partials_dropped": stale_partials,
             "cues_emitted": self._cue_index,
+            "latency": self._latency.summary(),
         }
 
     # -- API de Fase 5 (especificación) -------------------------------------
@@ -202,6 +211,7 @@ class SubtitlePipeline:
                 logger.exception("fallo al cerrar %s", type(component).__name__)
         self._threads = []
         self._started = False
+        self._latency.dump()
         logger.info("pipeline detenido")
 
     @property
@@ -298,6 +308,7 @@ class SubtitlePipeline:
             job = self._translation_jobs.get()
             if job is _SENTINEL:
                 break
+            self._latency.mark(job.cue_id, "translating")
             self._emit_translated(job)
         self._publish(PipelineFinished())
 
@@ -344,6 +355,7 @@ class SubtitlePipeline:
         cue_id = f"u{self._cue_index}"
         if result.is_final:
             self._finalized.add(cue_id)
+            self._latency.mark(cue_id, "dispatch")
             self.schedule_translations(cue_id, result, is_final=True)
             self._cue_index += 1
             return cue_id
@@ -400,6 +412,7 @@ class SubtitlePipeline:
         else:
             text = result.translated_text
             source_language = result.source_language
+        self._latency.mark(cue_id, "rendered")
         self._publish(
             self._build_cue(
                 cue_id, job.result, text=text, is_final=job.is_final,
