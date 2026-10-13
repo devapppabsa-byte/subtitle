@@ -1,0 +1,119 @@
+"""Composition root: traduce configuración en implementaciones concretas.
+
+Aquí —y solo aquí— se nombran las clases reales. El resto de la aplicación
+depende exclusivamente de las interfaces, así que añadir un motor nuevo
+consiste en un ``elif`` en esta función, sin tocar el pipeline ni la UI.
+"""
+
+from __future__ import annotations
+
+from app.audio.base import AudioSource
+from app.audio.synthetic import SyntheticAudioSource
+from app.audio.wav import WavFileAudioSource
+from app.core.errors import ConfigurationError
+from app.core.pipeline import SubtitlePipeline
+from app.overlay.console import ConsoleRenderer
+from app.settings.config import AppSettings
+from app.speech.base import SpeechRecognizer
+from app.speech.scripted import ScriptedSpeechRecognizer, ScriptedUtterance
+from app.subtitles.base import SubtitleRenderer
+from app.translation.base import Translator
+from app.translation.passthrough import PassthroughTranslator
+
+__all__ = [
+    "build_audio_source",
+    "build_recognizer",
+    "build_translator",
+    "build_renderer",
+    "build_pipeline",
+]
+
+
+def build_audio_source(settings: AppSettings) -> AudioSource:
+    audio = settings.audio
+    if audio.source == "synthetic":
+        return SyntheticAudioSource(
+            sample_rate=audio.sample_rate,
+            chunk_duration=audio.chunk_duration,
+            total_duration=audio.total_duration,
+            realtime=audio.realtime,
+        )
+    if audio.source == "wav":
+        if not audio.path:
+            raise ConfigurationError("audio.path es obligatorio para la fuente 'wav'")
+        return WavFileAudioSource(audio.path, chunk_duration=audio.chunk_duration, realtime=audio.realtime)
+    if audio.source == "microphone":
+        raise ConfigurationError(
+            "La fuente 'microphone' se implementa en una fase posterior "
+            "(sounddevice + PortAudio). Configurá 'synthetic' o 'wav'."
+        )
+    raise ConfigurationError(f"Origen de audio desconocido: {audio.source!r}")
+
+
+def build_recognizer(settings: AppSettings) -> SpeechRecognizer:
+    speech = settings.speech
+    if speech.engine == "scripted":
+        return ScriptedSpeechRecognizer(
+            script=_demo_script(settings),
+            emit_partials=speech.emit_partials,
+            language=speech.language,
+        )
+    raise ConfigurationError(
+        f"Motor de voz '{speech.engine}' no implementado todavía. "
+        "Implementá SpeechRecognizer en app/speech/ y registralo aquí."
+    )
+
+
+def build_translator(settings: AppSettings) -> Translator:
+    translation = settings.translation
+    if translation.engine == "passthrough":
+        return PassthroughTranslator()
+    if translation.engine == "mapping":
+        from app.translation.mapping import MappingTranslator
+
+        return MappingTranslator(
+            {
+                "hello world": "hola mundo",
+                "the subtitles are working": "los subtítulos funcionan",
+                "we can swap the engine": "podemos cambiar el motor",
+            },
+            source_language="en",
+            target_language=translation.target_language,
+        )
+    raise ConfigurationError(
+        f"Motor de traducción '{translation.engine}' no implementado todavía. "
+        "Implementá Translator en app/translation/ y registralo aquí."
+    )
+
+
+def build_renderer(settings: AppSettings) -> SubtitleRenderer:
+    overlay = settings.overlay
+    if overlay.renderer == "console":
+        return ConsoleRenderer(show_partials=overlay.show_partials)
+    if overlay.renderer == "qt":
+        from app.overlay.qt_overlay import QtOverlayRenderer
+
+        return QtOverlayRenderer(style=overlay.style)
+    raise ConfigurationError(f"Renderizador desconocido: {overlay.renderer!r}")
+
+
+def build_pipeline(settings: AppSettings) -> SubtitlePipeline:
+    return SubtitlePipeline(
+        audio_source=build_audio_source(settings),
+        recognizer=build_recognizer(settings),
+        translator=build_translator(settings),
+        source_language=settings.translation.source_language,
+        target_language=settings.translation.target_language,
+        translate_partials=settings.translation.translate_partials,
+        emit_partial_cues=settings.overlay.show_partials,
+    )
+
+
+def _demo_script(settings: AppSettings) -> list[ScriptedUtterance]:
+    """Guion del simulador: permite ver el pipeline completo sin motor real."""
+    if settings.speech.engine != "scripted":
+        return []
+    return [
+        ScriptedUtterance("hello world", 0.5, 2.0, language="en"),
+        ScriptedUtterance("the subtitles are working", 2.5, 4.0, language="en"),
+    ]

@@ -1,0 +1,22 @@
+# --- Núcleo (Fase 0) ---------------------------------------------------------
+numpy>=1.26
+
+# --- UI (Fase 1) -------------------------------------------------------------
+PySide6>=6.6
+
+# --- Desarrollo --------------------------------------------------------------
+pytest>=7.4
+pytest-timeout>=2.2
+
+# --- Opcionales: se instalan a medida que cada fase los necesita -------------
+# Overlay de escritorio (Fase de UI): ya instalado en Fase 1
+# Captura de micrófono / audio del sistema (Fase de audio real):
+#   sounddevice>=0.4
+# Reconocimiento de voz local (Fase de voz):
+#   faster-whisper>=1.0
+# Reconocimiento de voz en la nube (Fase de voz):
+#   deepgram-sdk>=3.0
+#   assemblyai>=1.0
+#   openai>=1.0
+# Traducción (Fase de traducción):
+#   deep-translator>=1.11

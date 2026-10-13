@@ -1,0 +1,35 @@
+{
+  "log_level": "INFO",
+  "audio": {
+    "source": "synthetic",
+    "sample_rate": 16000,
+    "chunk_duration": 0.5,
+    "total_duration": 5.0,
+    "realtime": false
+  },
+  "speech": {
+    "engine": "scripted",
+    "language": "en",
+    "emit_partials": true
+  },
+  "translation": {
+    "engine": "mapping",
+    "source_language": "en",
+    "target_language": "es",
+    "translate_partials": false
+  },
+  "overlay": {
+    "renderer": "console",
+    "show_partials": true,
+    "style": {
+      "font_family": "sans-serif",
+      "font_size": 32,
+      "text_color": "#FFFFFF",
+      "background_color": "#000000",
+      "background_opacity": 0.6,
+      "position": "bottom",
+      "max_lines": 2,
+      "margin_pixels": 64
+    }
+  }
+}
