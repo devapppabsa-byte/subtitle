@@ -34,7 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reproducir el audio al ritmo real (útil para ver los subtítulos en vivo).",
     )
-    parser.add_argument("--speech-engine", help="Motor de reconocimiento de voz.")
+    parser.add_argument("--speech-engine", help="Motor de reconocimiento de voz (scripted, groq).")
+    parser.add_argument("--speech-model", help="Modelo de voz (groq: whisper-large-v3-turbo).")
+    parser.add_argument("--speech-language", help="Idioma ISO o 'auto' para autodetectar.")
     parser.add_argument("--translation-engine", help="Motor de traducción.")
     parser.add_argument("--source-language", help="Idioma de origen ('auto' para detectar).")
     parser.add_argument("--target-language", help="Idioma de destino.")
@@ -55,6 +57,10 @@ def apply_cli_overrides(settings: AppSettings, args: argparse.Namespace) -> None
         settings.audio.realtime = args.realtime
     if args.speech_engine is not None:
         settings.speech.engine = args.speech_engine
+    if args.speech_model is not None:
+        settings.speech.model = args.speech_model
+    if args.speech_language is not None:
+        settings.speech.language = None if args.speech_language == "auto" else args.speech_language
     if args.translation_engine is not None:
         settings.translation.engine = args.translation_engine
     if args.source_language is not None:

@@ -53,13 +53,17 @@ class SpeechSettings:
     """Motor de reconocimiento de voz."""
 
     engine: str = "scripted"
-    """``scripted`` | ``faster-whisper`` | ``deepgram`` | ``assemblyai`` | ``openai``."""
+    """``scripted`` | ``groq`` | ``faster-whisper`` | ``deepgram`` | ``assemblyai`` | ``openai``."""
 
     model: str = "base"
+    """Para ``groq``: ``whisper-large-v3-turbo`` (defecto si es ``base``) o ``whisper-large-v3``."""
+
     language: str | None = None
+    """Código ISO o ``None``/``auto`` para autodetectar con la propia transcripción."""
+
     emit_partials: bool = True
     api_key_env: str | None = None
-    """Nombre de la variable de entorno con la credencial del proveedor."""
+    """Nombre de la variable de entorno con la credencial (Groq: ``GROQ_API_KEY``)."""
 
 
 @dataclass(slots=True)

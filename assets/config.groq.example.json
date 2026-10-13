@@ -1,0 +1,26 @@
+{
+  "log_level": "INFO",
+  "audio": {
+    "source": "monitor",
+    "sample_rate": 16000,
+    "chunk_duration": 0.5,
+    "realtime": true
+  },
+  "speech": {
+    "engine": "groq",
+    "model": "whisper-large-v3-turbo",
+    "language": null,
+    "emit_partials": false,
+    "api_key_env": "GROQ_API_KEY"
+  },
+  "translation": {
+    "engine": "mapping",
+    "source_language": "auto",
+    "target_language": "es",
+    "translate_partials": false
+  },
+  "overlay": {
+    "renderer": "console",
+    "show_partials": false
+  }
+}

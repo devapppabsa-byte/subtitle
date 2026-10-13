@@ -66,6 +66,20 @@ def build_recognizer(settings: AppSettings) -> SpeechRecognizer:
             emit_partials=speech.emit_partials,
             language=speech.language,
         )
+    if speech.engine == "groq":
+        import os
+
+        from app.speech.groq import DEFAULT_MODEL, GroqSpeechRecognizer
+
+        key_env = speech.api_key_env or "GROQ_API_KEY"
+        api_key = os.environ.get(key_env)
+        if not api_key:
+            raise ConfigurationError(
+                f"Falta la clave de Groq: exportá {key_env} o configurá speech.api_key_env."
+            )
+        model = speech.model if speech.model not in ("", "base") else DEFAULT_MODEL
+        language = speech.language if speech.language != "auto" else None
+        return GroqSpeechRecognizer(api_key=api_key, model=model, language=language)
     raise ConfigurationError(
         f"Motor de voz '{speech.engine}' no implementado todavía. "
         "Implementá SpeechRecognizer en app/speech/ y registralo aquí."
