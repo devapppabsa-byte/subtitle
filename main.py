@@ -12,7 +12,8 @@ import sys
 
 from app.core.factory import build_pipeline, build_renderer
 from app.core.logging import configure_logging, get_logger
-from app.settings.config import AppSettings, load_settings
+from app.settings.config import AppSettings
+from app.settings.store import export_logs, load_user_settings, save_settings, validate_api_config
 
 logger = get_logger("main")
 
@@ -51,6 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--translation-parallel", action="store_true", help="Traducir destinos en paralelo.")
     parser.add_argument("--translation-cache", type=int, help="Tamaño de la caché LRU de traducciones.")
     parser.add_argument("--latency-log", help="Ruta JSONL para el log de latencia por tramos.")
+    parser.add_argument("--save-config", action="store_true", help="Guardar prefs en ~/.config/traductor-tiempo-real/ al salir.")
+    parser.add_argument("--validate-config", action="store_true", help="Verificar proveedores y salir (sin secretos).")
+    parser.add_argument("--export-logs", metavar="DIR", help="Exportar diagnóstico redactado y salir.")
     parser.add_argument("--log-level", help="DEBUG, INFO, WARNING, ERROR.")
     return parser
 
@@ -123,9 +127,21 @@ def main(argv: list[str] | None = None) -> int:
         for mon in monitors:
             print(f"  #{mon.index} {mon.name}")
         return 0
-    settings = load_settings(args.config)
+    settings = load_user_settings(args.config)
     apply_cli_overrides(settings, args)
     configure_logging(settings.log_level)
+
+    if args.validate_config:
+        for report in validate_api_config(settings):
+            state = "OK" if report.ok else ("FALTA CLAVE" if not report.key_present else "ERROR")
+            print(f"[{state}] {report.provider} ({report.key_env}): {report.detail}")
+            for model in report.models:
+                print(f"  - {model}")
+        return 0
+    if args.export_logs:
+        export_logs(settings, None, args.export_logs, latency_log=settings.latency.latency_log or None)
+        print(f"diagnóstico en {args.export_logs} (redactado, sin claves ni audio)")
+        return 0
 
     logger.info(
         "configuración: audio=%s voz=%s traducción=%s render=%s (%s→%s)",
@@ -141,13 +157,17 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = build_pipeline(settings)
     renderer = build_renderer(settings)
     if settings.overlay.renderer == "qt":
-        return _run_qt(pipeline, settings, timeout=args.duration)
-    try:
-        with renderer:
-            pipeline.run(renderer, timeout=args.duration)
-    except KeyboardInterrupt:
-        logger.info("interrumpido por el usuario")
-    return 0
+        code = _run_qt(pipeline, settings, timeout=args.duration)
+    else:
+        try:
+            with renderer:
+                pipeline.run(renderer, timeout=args.duration)
+        except KeyboardInterrupt:
+            logger.info("interrumpido por el usuario")
+        code = 0
+    if args.save_config:
+        save_settings(settings)
+    return code
 
 
 def _run_qt(pipeline, settings, timeout: float | None) -> int:

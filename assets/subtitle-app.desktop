@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Subtítulos en vivo
+Comment=Subtítulos del audio del sistema con traducción (Groq)
+Exec=subtitle-app --renderer qt
+Icon=subtitle-app
+Terminal=false
+Categories=AudioVideo;Accessibility;
+StartupNotify=true
+X-GNOME-UsesNotifications=false

@@ -62,6 +62,12 @@ class SettingsDialog:
 
         dialog.accepted.connect(lambda: self._apply(langs.text(), font.value(), opacity.value(), on_top.isChecked()))
 
+        save_default = QtWidgets.QPushButton("Guardar como predeterminado", dialog)
+        save_default.setToolTip("Guarda en ~/.config/traductor-tiempo-real/settings.json")
+        save_default.clicked.connect(lambda: self._apply_and_save(
+            langs.text(), font.value(), opacity.value(), on_top.isChecked()))
+        layout.addRow(save_default)
+
         self._dialog = dialog
         self._fields = (langs, font, opacity, on_top)
 
@@ -90,3 +96,10 @@ class SettingsDialog:
         self._settings.overlay.always_on_top = on_top
         if self._on_apply is not None:
             self._on_apply()
+
+    def _apply_and_save(self, langs: str, font_size: int, opacity: int, on_top: bool) -> None:
+        """Aplica y persiste como base de futuros arranques."""
+        from app.settings.store import save_settings
+
+        self._apply(langs, font_size, opacity, on_top)
+        save_settings(self._settings)

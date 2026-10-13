@@ -2,8 +2,22 @@
 name = "subtitle-app"
 version = "0.1.0"
 description = "Subtítulos en tiempo real con traducción, organizados por interfaces intercambiables."
+readme = "README.md"
+authors = [{name = "subtitle-app"}]
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26", "PySide6>=6.6", "sounddevice>=0.4", "groq>=0.9"]
+
+[project.scripts]
+subtitle-app = "main:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-timeout>=2.2"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools]
+py-modules = ["main"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
