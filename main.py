@@ -172,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_qt(pipeline, settings, timeout: float | None) -> int:
     """Panel principal + ventanas por idioma (Fase 6), sin red en la UI."""
+    from PySide6.QtCore import QLockFile
     from PySide6.QtWidgets import QApplication
 
     from app.ui.bridge import PipelineBridge
@@ -180,6 +181,11 @@ def _run_qt(pipeline, settings, timeout: float | None) -> int:
     app = QApplication.instance() or QApplication([])
     app.setOrganizationName("subtitle-app")
     app.setApplicationName("subtitle-app")
+    lock = QLockFile("/tmp/subtitle-app.lock")
+    if not lock.tryLock(100):
+        logger.error("ya hay una instancia corriendo (lock /tmp/subtitle-app.lock)")
+        print("Ya hay una instancia corriendo; ciérrala antes de abrir otra.")
+        return 2
     bridge = PipelineBridge(pipeline, None, poll_ms=settings.latency.poll_ms)
     window = MainWindow(settings, pipeline, bridge)
     window.show()

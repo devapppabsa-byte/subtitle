@@ -384,7 +384,7 @@ class GroqTranslator(Translator):
         if not self._verified:
             self._model = resolve_model(self._client, self._preferred_model)
             self._verified = True
-            logger.info("traductor Groq iniciado (modelo=%s)", self._model)
+        logger.info("traductor Groq iniciado (modelo=%s)", self._model)
         return self._client
 
     def _on_start(self) -> None:
