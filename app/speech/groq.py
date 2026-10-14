@@ -317,20 +317,39 @@ class GroqSpeechRecognizer(SpeechRecognizer):
                 else:
                     self._buffer = np.zeros(0, dtype=np.float32)
         if job is not None:
+            self._submit_job(job)
+
+    def _submit_job(self, job: _TranscriptionJob | object, *, critical: bool = False) -> None:
+        """Encola sin bloquear jamás (ni siquiera en ``stop``).
+
+        Llena → descarta lo más viejo. El centinela (``critical``) siempre
+        entra porque puede desalojar datos: garantiza la terminación.
+        """
+        while True:
             try:
                 self._jobs.put_nowait(job)
+                return
             except Full:
-                # API lenta y audio continuo: se descarta la ventana más vieja.
                 try:
-                    self._jobs.get_nowait()
+                    dropped = self._jobs.get_nowait()
+                    if dropped is _SENTINEL:
+                        # Nunca perder un centinela previo: se repone y reintenta.
+                        self._jobs.put_nowait(dropped)
+                        continue
                 except Empty:
                     pass
-                self._dropped_windows += 1
-                logger.warning("ventana de voz descartada por backpressure")
-                try:
-                    self._jobs.put_nowait(job)
-                except Full:  # pragma: no cover - carrera extrema
-                    pass
+                if not critical:
+                    self._dropped_windows += 1
+                    logger.warning("ventana de voz descartada por backpressure")
+                    return
+                # critical: insiste hasta que el centinela entre.
+
+    def _drain_queue(self) -> None:
+        try:
+            while True:
+                self._jobs.get_nowait()
+        except Empty:
+            pass
 
     def flush(self) -> None:
         with self._lock:
@@ -341,13 +360,20 @@ class GroqSpeechRecognizer(SpeechRecognizer):
                 samples=self._buffer, start_time=self._buffer_start, duration=buffered
             )
             self._buffer = np.zeros(0, dtype=np.float32)
-        self._jobs.put(job)
+        self._submit_job(job)
 
     # -- ciclo de vida ----------------------------------------------------
     def _on_start(self) -> None:
         if self._client is None:
             self._client = _create_client(self._api_key)
         self._model = resolve_model(self._client, self._preferred_model)
+        with self._lock:
+            # Sesión limpia: sin restos de audio ni dedupe de una corrida previa.
+            self._buffer = np.zeros(0, dtype=np.float32)
+            self._buffer_start = 0.0
+            self._stream_time = 0.0
+            self._last_text = ""
+            self._drain_queue()
         self._stop_event.clear()
         self._worker = threading.Thread(target=self._worker_loop, name="groq-speech", daemon=True)
         self._worker.start()
@@ -355,7 +381,7 @@ class GroqSpeechRecognizer(SpeechRecognizer):
 
     def _on_stop(self, timeout: float | None) -> None:
         self.flush()
-        self._jobs.put(_SENTINEL)
+        self._submit_job(_SENTINEL, critical=True)
         worker, self._worker = self._worker, None
         if worker is not None:
             worker.join(timeout=timeout)

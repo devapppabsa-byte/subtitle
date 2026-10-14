@@ -192,3 +192,58 @@ def test_factory_groq_builds(monkeypatch):
     rec = build_recognizer(s)
     assert isinstance(rec, G)
     assert rec._preferred_model == "whisper-large-v3-turbo"
+
+
+def test_restart_emits_in_second_session():
+    """Reinicio Detener→Iniciar: la 2ª sesión transcribe sin colgarse."""
+    import threading
+    import time
+
+    from app.audio.synthetic import SyntheticAudioSource
+    from app.core.pipeline import SubtitlePipeline
+    from app.translation.passthrough import PassthroughTranslator
+
+    from conftest import CollectingRenderer
+
+    def _run_once():
+        renderer = CollectingRenderer()
+        pipe = SubtitlePipeline(
+            audio_source=SyntheticAudioSource(chunk_duration=0.5, total_duration=2.0),
+            recognizer=GroqSpeechRecognizer(
+                api_key="fake", window_seconds=1.0, min_seconds=0.4, client=_FakeClient(),
+            ),
+            translator=PassthroughTranslator(),
+            source_language="es",
+            target_language="es",
+        )
+        pipe.recognizer.configure(16_000, 1)
+        pipe.run(renderer, timeout=10)
+        leftovers = [t for t in threading.enumerate() if t.name == "groq-speech"]
+        return renderer, leftovers
+
+    renderer1, left1 = _run_once()
+    assert [c.text for c in renderer1.cues if c.is_final] == ["hola mundo"]
+    assert left1 == []
+
+    # Misma instancia reiniciada (caso del botón Detener→Iniciar).
+    rec = GroqSpeechRecognizer(
+        api_key="fake", window_seconds=1.0, min_seconds=0.4, client=_FakeClient(),
+    )
+    rec.configure(16_000, 1)
+    rec.start()
+    try:
+        for _ in range(2):
+            rec.feed(make_chunk(0.5))
+        first = rec.results.get(timeout=5.0)
+    finally:
+        rec.stop()
+    assert first.text == "hola mundo"
+    rec.start()
+    try:
+        for _ in range(2):
+            rec.feed(make_chunk(0.5))
+        second = rec.results.get(timeout=5.0)
+    finally:
+        rec.stop()
+    assert second.text == "hola mundo"
+    assert [t for t in threading.enumerate() if t.name == "groq-speech"] == []

@@ -183,6 +183,7 @@ def _run_qt(pipeline, settings, timeout: float | None) -> int:
     bridge = PipelineBridge(pipeline, None, poll_ms=settings.latency.poll_ms)
     window = MainWindow(settings, pipeline, bridge)
     window.show()
+    window.toggle_running()  # arranca capturando sin pulsar Iniciar
     bridge.finished.connect(app.quit)
     if timeout is not None:
         from PySide6.QtCore import QTimer

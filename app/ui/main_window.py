@@ -105,17 +105,26 @@ class MainWindow:
         self._window.show()
 
     def toggle_running(self) -> None:
-        """Inicia o detiene el pipeline."""
-        if self._running:
-            self._bridge.stop()
-            self._running = False
-            self._toggle.setText("Iniciar")
-            self._status.setText("Detenido")
-        else:
-            self._bridge.start()
-            self._running = True
-            self._toggle.setText("Detener")
-            self._status.setText("Escuchando…")
+        """Inicia o detiene el pipeline (con el botón bloqueado en transición)."""
+        from app.core.logging import get_logger
+
+        self._toggle.setEnabled(False)
+        try:
+            if self._running:
+                self._bridge.stop()
+                self._running = False
+                self._toggle.setText("Iniciar")
+                self._status.setText("Detenido")
+            else:
+                self._bridge.start()
+                self._running = True
+                self._toggle.setText("Detener")
+                self._status.setText("Escuchando…")
+        except Exception:
+            get_logger(__name__).exception("fallo al cambiar el estado del pipeline")
+            self._status.setText("Error: ver el log")
+        finally:
+            self._toggle.setEnabled(True)
 
     def update_subtitle(self, language: str, text: str, *, is_final: bool = True) -> None:
         """Actualiza el texto de la ventana del idioma (creándola si falta)."""
