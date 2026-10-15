@@ -11,7 +11,7 @@ import argparse
 import sys
 
 from app.core.factory import build_pipeline, build_renderer
-from app.core.logging import configure_logging, get_logger
+from app.core.logging import configure_file_logging, configure_logging, get_logger
 from app.settings.config import AppSettings
 from app.settings.store import export_logs, load_user_settings, save_settings, validate_api_config
 
@@ -189,8 +189,11 @@ def _run_qt(pipeline, settings, timeout: float | None) -> int:
     bridge = PipelineBridge(pipeline, None, poll_ms=settings.latency.poll_ms)
     window = MainWindow(settings, pipeline, bridge)
     window.show()
+    configure_file_logging(str(_default_log_path()))
     window.toggle_running()  # arranca capturando sin pulsar Iniciar
-    bridge.finished.connect(app.quit)
+    # En modo gráfico la ventana manda: el fin de una fuente finita NO cierra
+    # la app (antes el lanzador parpadeaba y se cerraba con el demo de 5 s).
+    bridge.finished.connect(window.on_pipeline_finished)
     if timeout is not None:
         from PySide6.QtCore import QTimer
 
@@ -210,6 +213,18 @@ def _run_qt(pipeline, settings, timeout: float | None) -> int:
             except Exception:
                 pass
     return 0
+
+
+def _default_log_path():
+    """Log persistente para lanzamientos sin terminal (menú de Omarchy)."""
+    from pathlib import Path
+
+    from app.settings.store import user_config_dir
+
+    try:
+        return Path(user_config_dir()) / "app.log"
+    except OSError:
+        return Path("/tmp/subtitle-app.log")
 
 
 if __name__ == "__main__":

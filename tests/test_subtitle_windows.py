@@ -217,3 +217,28 @@ def test_bridge_router_called_instead_of_renderer(qapp):
     cue = _cue("hola", "es")
     bridge._on_cue(cue)
     assert received == [cue]
+
+
+def test_finished_keeps_panel_open(qapp):
+    """El fin de una fuente finita no cierra la app (bug del lanzador)."""
+    main = _main_window(qapp)
+    main.toggle_running()
+    assert main._running is True
+    main.on_pipeline_finished("completed")
+    assert main._running is False
+    assert main._toggle.text() == "Iniciar"
+    assert "Finalizado" in main._status.text()
+    for window in main.windows.values():
+        window.hide()
+
+
+def test_file_logging_writes(tmp_path):
+    import logging
+
+    from app.core.logging import configure_file_logging, configure_logging
+
+    configure_logging(logging.INFO)
+    target = configure_file_logging(str(tmp_path / "sub" / "app.log"))
+    assert target.endswith("app.log")
+    logging.getLogger("subtitle_app.test_probe").info("hola-log")
+    assert "hola-log" in (tmp_path / "sub" / "app.log").read_text()

@@ -36,4 +36,22 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-__all__ = ["configure_logging", "get_logger"]
+__all__ = ["configure_logging", "configure_file_logging", "get_logger"]
+
+
+def configure_file_logging(path: str) -> str:
+    """Añade un FileHandler al logger raíz (para lanzamientos sin terminal).
+
+    Devuelve la ruta usada. Los errores de E/S se ignoran a propósito.
+    """
+    try:
+        from pathlib import Path
+
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(str(target), encoding="utf-8")
+        handler.setFormatter(logging.Formatter(DEFAULT_FORMAT, DEFAULT_DATE_FORMAT))
+        logging.getLogger().addHandler(handler)
+        return str(target)
+    except OSError:
+        return ""

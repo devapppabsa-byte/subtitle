@@ -126,6 +126,21 @@ class MainWindow:
         finally:
             self._toggle.setEnabled(True)
 
+    def on_pipeline_finished(self, reason: str) -> None:
+        """La fuente terminó: el panel SIGUE abierto para reiniciar.
+
+        (Antes esto cerraba la app; por eso el lanzador “se abría y cerraba solo”
+        con el demo sintético de 5 s.)
+        """
+        if self._running:
+            try:
+                self._bridge.stop()
+            except Exception:
+                pass
+            self._running = False
+        self._toggle.setText("Iniciar")
+        self._status.setText(f"Finalizado ({reason}) — pulsa Iniciar")
+
     def update_subtitle(self, language: str, text: str, *, is_final: bool = True) -> None:
         """Actualiza el texto de la ventana del idioma (creándola si falta)."""
         key = (language or ORIGINAL_KEY).lower()
