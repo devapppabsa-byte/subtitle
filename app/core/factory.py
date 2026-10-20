@@ -25,6 +25,7 @@ __all__ = [
     "build_audio_source",
     "build_recognizer",
     "build_translator",
+    "build_translation_engine",
     "build_renderer",
     "build_pipeline",
 ]
@@ -130,9 +131,60 @@ def build_translator(settings: AppSettings) -> Translator:
             cache_size=translation.cache_size,
             parallel=translation.parallel,
         )
+    if translation.engine in ("openai", "anthropic", "openrouter"):
+        import os
+
+        from app.translation.chat import ChatTranslator
+        from app.translation.providers import provider_for_engine
+
+        provider = provider_for_engine(translation.engine)
+        assert provider is not None  # engine registrado arriba
+        key_env = translation.api_key_env or provider.key_env
+        api_key = os.environ.get(key_env)
+        if not api_key:
+            raise ConfigurationError(
+                f"Falta la clave de {provider.label}: exportá {key_env} "
+                "o pegá una clave válida en el panel (Motor IA)."
+            )
+        return ChatTranslator(
+            provider,
+            api_key,
+            model=translation.model,
+            request_timeout=translation.request_timeout,
+            max_retries=translation.max_retries,
+            cache_size=translation.cache_size,
+            parallel=translation.parallel,
+        )
     raise ConfigurationError(
         f"Motor de traducción '{translation.engine}' no implementado todavía. "
         "Implementá Translator en app/translation/ y registralo aquí."
+    )
+
+
+def build_translation_engine(
+    provider_id: str,
+    *,
+    api_key: str,
+    model: str = "",
+    translation,
+) -> Translator:
+    """Construye el traductor para un proveedor elegido en caliente (panel Motor IA).
+
+    Reutiliza los knobs de ``settings.translation`` y devuelve el motor listo
+    para ``pipeline.swap_translator``. Sin claves no construye nada.
+    """
+    from app.translation.chat import ChatTranslator
+    from app.translation.providers import provider_by_id
+
+    provider = provider_by_id(provider_id)
+    return ChatTranslator(
+        provider,
+        api_key,
+        model=model,
+        request_timeout=translation.request_timeout,
+        max_retries=translation.max_retries,
+        cache_size=translation.cache_size,
+        parallel=translation.parallel,
     )
 
 

@@ -239,6 +239,7 @@ def translate_text(
     timeout: float = 30.0,
     max_retries: int = 2,
     cache: "TranslationCache | None" = None,
+    label: str = "Groq",
 ) -> TranslationResult:
     """Traduce UN fragmento completo a UN idioma (nunca por palabra)."""
     from app.core.retry import with_retries
@@ -267,7 +268,7 @@ def translate_text(
                 model=model, messages=messages, temperature=0.0, timeout=timeout,
             )
         except Exception as exc:
-            raise TranslationError(f"Traducción Groq falló ({src}→{dst}): {exc}") from exc
+            raise TranslationError(f"Traducción {label} falló ({src}→{dst}): {exc}") from exc
 
     try:
         response = with_retries(_call, max_retries=max_retries, what=f"traducción {src}→{dst}")
@@ -275,7 +276,7 @@ def translate_text(
     except TranslationError:
         raise
     except Exception as exc:  # pragma: no cover - defensivo
-        raise TranslationError(f"Traducción Groq falló ({src}→{dst}): {exc}") from exc
+        raise TranslationError(f"Traducción {label} falló ({src}→{dst}): {exc}") from exc
     if not translated:
         raise TranslationError(f"El modelo devolvió una traducción vacía ({src}→{dst}).")
     result = TranslationResult(
@@ -301,6 +302,7 @@ def translate_to_languages(
     max_retries: int = 2,
     cache: "TranslationCache | None" = None,
     parallel: bool = False,
+    label: str = "Groq",
 ) -> dict[str, TranslationResult]:
     """Traduce UN fragmento a VARIOS idiomas, con fallo aislado por idioma.
 
@@ -319,7 +321,7 @@ def translate_to_languages(
         try:
             return dst, translate_text(
                 text, src, dst, client=client, model=model, context=context, timeout=timeout,
-                max_retries=max_retries, cache=cache,
+                max_retries=max_retries, cache=cache, label=label,
             )
         except Exception as exc:  # cualquier fallo (red, API, SDK) queda aislado a su idioma
             logger.warning("traducción a %s falló, se usa el original: %s", dst, exc)

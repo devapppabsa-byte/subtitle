@@ -273,3 +273,52 @@ def test_settings_target_languages_env():
     )
     assert s.translation.target_languages == ["es", "fr", "de"]
     assert s.translation.model == "m"
+
+
+def test_factory_openai_requires_key(monkeypatch):
+    from app.core.factory import build_translator
+    from app.settings.config import AppSettings
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    s = AppSettings()
+    s.translation.engine = "openai"
+    with pytest.raises(ConfigurationError, match="OPENAI_API_KEY"):
+        build_translator(s)
+
+
+def test_factory_anthropic_builds(monkeypatch):
+    from app.core.factory import build_translator
+    from app.settings.config import AppSettings
+    from app.translation.chat import ChatTranslator
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+    s = AppSettings()
+    s.translation.engine = "anthropic"
+    tr = build_translator(s)
+    assert isinstance(tr, ChatTranslator)
+    assert tr.provider.id == "anthropic"
+
+
+def test_factory_openrouter_builds_with_model(monkeypatch):
+    from app.core.factory import build_translator
+    from app.settings.config import AppSettings
+    from app.translation.chat import ChatTranslator
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-fake")
+    s = AppSettings()
+    s.translation.engine = "openrouter"
+    s.translation.model = "meta-llama/llama-3.1-8b-instruct"
+    tr = build_translator(s)
+    assert isinstance(tr, ChatTranslator)
+    assert tr.model == "meta-llama/llama-3.1-8b-instruct"
+
+
+def test_build_translation_engine_helper(monkeypatch):
+    from app.core.factory import build_translation_engine
+    from app.settings.config import AppSettings
+    from app.translation.chat import ChatTranslator
+
+    s = AppSettings()
+    tr = build_translation_engine("openai", api_key="sk-fake", translation=s.translation)
+    assert isinstance(tr, ChatTranslator)
+    assert tr.provider.id == "openai"

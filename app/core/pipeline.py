@@ -80,6 +80,7 @@ class SubtitlePipeline:
         self._source = audio_source
         self._recognizer = recognizer
         self._translator = translator
+        self._translator_lock = threading.Lock()
         self._source_language = source_language
         self._target_language = target_language
         multi = [t for t in (target_languages or []) if t.strip()]
@@ -118,6 +119,29 @@ class SubtitlePipeline:
     @property
     def translator(self) -> Translator:
         return self._translator
+
+    def swap_translator(self, translator: Translator) -> None:
+        """Sustituye el traductor en caliente (proveedor elegido en el panel).
+
+        El hilo de traducción relee ``self._translator`` por cada job, así que
+        el cambio aplica al siguiente fragmento. Si el pipeline está corriendo,
+        arranca el nuevo y detiene el viejo (con LOCK para no solapar el cierre).
+        """
+        if not isinstance(translator, Translator):
+            raise TypeError("swap_translator espera un Translator")
+        with self._translator_lock:
+            previous = self._translator
+            if previous is translator:
+                return
+            if self._started:
+                translator.start()
+            self._translator = translator
+        if self._started and previous is not translator:
+            try:
+                previous.stop()
+            except Exception:  # pragma: no cover - cierre defensivo
+                logger.exception("fallo al detener el traductor anterior")
+        logger.info("traductor cambiado a %s", type(translator).__name__)
 
     @property
     def target_languages(self) -> list[str]:

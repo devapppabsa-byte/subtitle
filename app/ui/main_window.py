@@ -29,12 +29,15 @@ class MainWindow:
         settings: "AppSettings",
         pipeline: "SubtitlePipeline",
         bridge: "PipelineBridge",
+        *,
+        on_engine_change=None,
     ) -> None:
         from PySide6 import QtCore, QtWidgets
 
         self._settings = settings
         self._pipeline = pipeline
         self._bridge = bridge
+        self._on_engine_change = on_engine_change
         self._windows: dict[str, SubtitleWindow] = {}
         self._running = False
 
@@ -47,6 +50,8 @@ class MainWindow:
         self._toggle = QtWidgets.QPushButton("Iniciar", central)
         self._toggle.clicked.connect(self.toggle_running)
         layout.addWidget(self._toggle)
+
+        self._build_ai_section(central, layout)
 
         self._langs = QtWidgets.QGroupBox("Idiomas (ventanas)", central)
         langs_layout = QtWidgets.QVBoxLayout(self._langs)
@@ -89,6 +94,187 @@ class MainWindow:
         self._enabled: set[str] = set(self._active_languages())
         self._rebuild_language_checks()
         bridge.set_router(self._route_cue)
+
+    # -- sección "Motor IA" -------------------------------------------------
+    def _build_ai_section(self, central, layout) -> None:
+        """Combo de proveedor + clave + botón Validar (red en hilo aparte)."""
+        from PySide6 import QtCore, QtWidgets
+
+        from app.translation.providers import PROVIDERS
+
+        self._engine_ids: list[str | None] = [None, *PROVIDERS.keys()]
+        group = QtWidgets.QGroupBox("Motor IA (traducción)", central)
+        form = QtWidgets.QFormLayout(group)
+        layout.addWidget(group)
+        self._ai_group = group
+
+        self._engine_combo = QtWidgets.QComboBox(group)
+        self._engine_combo.addItem("Sin IA (directo)", None)
+        for provider in PROVIDERS.values():
+            self._engine_combo.addItem(provider.label, provider.id)
+        current = self._current_provider_id()
+        index = self._engine_combo.findData(current)
+        self._engine_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        form.addRow("Proveedor:", self._engine_combo)
+
+        from PySide6 import QtCore
+
+        class _ValidationRelay(QtCore.QObject):
+            result = QtCore.Signal(str, str, str, bool)
+
+        self._relay = _ValidationRelay(group)
+        self._relay.result.connect(self._finish_validation)
+
+        self._key_edit = QtWidgets.QLineEdit(group)
+        self._key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._key_edit.setPlaceholderText("Pega la API key del proveedor")
+        form.addRow("API key:", self._key_edit)
+
+        self._validate_btn = QtWidgets.QPushButton("Validar y usar", group)
+        self._validate_btn.clicked.connect(self._on_validate_clicked)
+        form.addRow("", self._validate_btn)
+
+        self._ai_status = QtWidgets.QLabel("", group)
+        self._ai_status.setWordWrap(True)
+        form.addRow("", self._ai_status)
+
+        self._validator = None  # inyectable en tests
+        self._refresh_ai_section()
+
+    def _current_provider_id(self) -> str | None:
+        from app.translation.providers import provider_for_engine
+
+        provider = provider_for_engine(self._settings.translation.engine)
+        return provider.id if provider else None
+
+    def _refresh_ai_section(self) -> None:
+        """Ajusta pistas/estado según el proveedor seleccionado."""
+        import os
+
+        from PySide6 import QtWidgets
+
+        from app.translation.providers import provider_by_id
+
+        provider_id = self._engine_combo.currentData()
+        known = os.environ.get(provider_by_id(provider_id).key_env) if provider_id else ""
+        self._key_edit.setEnabled(provider_id is not None)
+        self._validate_btn.setEnabled(provider_id is not None)
+        if provider_id is None:
+            self._ai_status.setText("Traducción directa: se muestra el texto original.")
+            return
+        self._key_edit.setPlaceholderText(
+            "Clave guardada — pega otra para cambiarla" if known else "Pega la API key del proveedor"
+        )
+        self._ai_status.setText(
+            f"{provider_by_id(provider_id).label}: clave {'detectada' if known else 'no detectada'}."
+        )
+
+    def _on_engine_changed(self, _index: int) -> None:
+        self._refresh_ai_section()
+
+    def _on_validate_clicked(self) -> None:
+        """Valida (sin bloquear la GUI) y aplica el proveedor si es válido."""
+        import threading
+
+        from PySide6 import QtWidgets
+
+        from app.translation.providers import provider_by_id
+
+        provider_id = self._engine_combo.currentData()
+        if provider_id is None:
+            self._apply_no_ai_engine()
+            return
+        provider = provider_by_id(provider_id)
+        api_key = self._key_edit.text().strip()
+        if not api_key:
+            import os
+
+            api_key = os.environ.get(provider.key_env, "")
+        if not api_key:
+            self._ai_status.setText(f"Falta la clave de {provider.label} ({provider.key_env}).")
+            return
+
+        self._validate_btn.setEnabled(False)
+        self._ai_status.setText(f"Verificando {provider.label}…")
+
+        def _work() -> None:
+            from app.settings.store import validate_key
+
+            validator = self._validator
+            if validator is not None:
+                report = validator(provider.id, api_key)
+            else:
+                report = validate_key(provider.id, api_key, key_env=provider.key_env)
+            self._relay.result.emit(provider.id, api_key, report.detail, report.ok)
+
+        threading.Thread(target=_work, name="ai-validate", daemon=True).start()
+
+    def _finish_validation(self, provider_id: str, api_key: str, detail: str, ok: bool) -> None:
+        """Slot en el hilo GUI: aplica el proveedor o informa del fallo."""
+        from app.core.logging import get_logger
+
+        from app.translation.providers import provider_by_id
+
+        self._validate_btn.setEnabled(True)
+        provider = provider_by_id(provider_id)
+        if not ok:
+            self._ai_status.setText(f"{provider.label}: {detail or 'clave no válida'}")
+            return
+        self._ai_status.setText(f"{provider.label}: ✓ {detail}")
+        self._activate_provider(provider, api_key, detail)
+
+    def _activate_provider(self, provider, api_key: str, detail: str) -> None:
+        """Persiste la clave, la inyecta en el entorno y cambia el motor en vivo."""
+        import os
+
+        from app.core.logging import get_logger
+        from app.settings.store import save_env_key
+
+        logger = get_logger(__name__)
+        os.environ[provider.key_env] = api_key
+        self._settings.translation.engine = provider.id
+        try:
+            save_env_key(provider.key_env, api_key)
+        except OSError:
+            logger.exception("no se pudo guardar la clave en el .env del usuario")
+        self._swap_translator(provider.id, api_key)
+
+    def _apply_no_ai_engine(self) -> None:
+        """Modo sin IA: traducción directa (passthrough)."""
+        from app.core.factory import build_translator
+
+        self._settings.translation.engine = "passthrough"
+        self._swap_translator_from_factory()
+
+    def _swap_translator(self, provider_id: str, api_key: str) -> None:
+        from app.core.factory import build_translation_engine
+
+        try:
+            translator = build_translation_engine(
+                provider_id, api_key=api_key, translation=self._settings.translation
+            )
+            if self._on_engine_change is not None:
+                self._on_engine_change(translator)
+            else:
+                self._pipeline.swap_translator(translator)
+        except Exception as exc:
+            from app.core.logging import get_logger
+
+            get_logger(__name__).exception("no se pudo activar el proveedor %s", provider_id)
+            self._ai_status.setText(f"No se pudo activar: {exc}")
+
+    def _swap_translator_from_factory(self) -> None:
+        from app.core.factory import build_translator
+
+        try:
+            translator = build_translator(self._settings)
+            if self._on_engine_change is not None:
+                self._on_engine_change(translator)
+            else:
+                self._pipeline.swap_translator(translator)
+        except Exception as exc:
+            self._ai_status.setText(f"No se pudo activar: {exc}")
 
     # -- API de Fase 6 ------------------------------------------------------
     @property

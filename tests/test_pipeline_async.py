@@ -184,3 +184,44 @@ def test_bridge_start_stop_lifecycle():
     bridge.start()
     bridge.stop()
     assert pipeline.running is False
+
+
+def test_swap_translator_hot_swaps_while_running():
+    from app.core.pipeline import SubtitlePipeline
+    from app.audio.synthetic import SyntheticAudioSource
+    from app.speech.scripted import ScriptedSpeechRecognizer
+    from app.translation.passthrough import PassthroughTranslator
+
+    pipe = SubtitlePipeline(
+        audio_source=SyntheticAudioSource(total_duration=5.0),
+        recognizer=ScriptedSpeechRecognizer([]),
+        translator=PassthroughTranslator(),
+        source_language="en",
+        target_languages=["es"],
+    )
+    pipe.start()
+    try:
+        new = PassthroughTranslator()
+        pipe.swap_translator(new)
+        assert pipe.translator is new
+        assert pipe.running is True
+    finally:
+        pipe.stop()
+
+
+def test_swap_translator_ignores_same_instance():
+    from app.core.pipeline import SubtitlePipeline
+    from app.audio.synthetic import SyntheticAudioSource
+    from app.speech.scripted import ScriptedSpeechRecognizer
+    from app.translation.passthrough import PassthroughTranslator
+
+    tr = PassthroughTranslator()
+    pipe = SubtitlePipeline(
+        audio_source=SyntheticAudioSource(total_duration=1.0),
+        recognizer=ScriptedSpeechRecognizer([]),
+        translator=tr,
+        source_language="en",
+        target_languages=["es"],
+    )
+    pipe.swap_translator(tr)
+    assert pipe.translator is tr

@@ -10,6 +10,9 @@ sounddevice>=0.4
 # --- Voz en la nube (Fase 3) ---------------------------------------------------
 groq>=0.9
 
+# --- Traducción multi-proveedor (OpenAI, Claude, OpenRouter) -------------------
+httpx>=0.27
+
 # --- Desarrollo --------------------------------------------------------------
 pytest>=7.4
 pytest-timeout>=2.2

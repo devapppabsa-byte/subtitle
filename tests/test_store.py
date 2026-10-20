@@ -163,3 +163,71 @@ def test_main_validate_and_export_flags(isolated_home, tmp_path, monkeypatch, ca
     assert entry.main() == 0
     assert settings_path().is_file()
     assert os.environ.get("GROQ_API_KEY") is None or True
+
+
+def test_validate_key_openai_with_mock_transport(isolated_home):
+    import httpx
+
+    from app.settings.store import validate_key
+
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(200, json={"data": [{"id": "gpt-4o-mini"}]})
+    )
+    report = validate_key("openai", "sk-test", transport=transport)
+    assert report.ok is True
+    assert report.provider == "openai"
+    assert report.models == ["gpt-4o-mini"]
+
+
+def test_validate_key_missing_is_offline(isolated_home):
+    from app.settings.store import validate_key
+
+    report = validate_key("anthropic", "")
+    assert report.ok is False
+    assert report.key_present is False
+    assert "ANTHROPIC_API_KEY" in report.detail
+
+
+def test_validate_key_never_leaks_secret(isolated_home):
+    import httpx
+
+    from app.settings.store import validate_key
+
+    secret = "sk-super-secreta-123"
+    transport = httpx.MockTransport(lambda req: httpx.Response(401, text=f"bad {secret}"))
+    report = validate_key("openai", secret, transport=transport)
+    assert report.ok is False
+    assert secret not in report.detail
+
+
+def test_validate_api_config_reports_new_provider(isolated_home):
+    settings = AppSettings()
+    settings.speech.engine = "scripted"
+    settings.translation.engine = "openrouter"
+    reports = validate_api_config(settings, environ={})
+    assert len(reports) == 1
+    assert reports[0].provider == "openrouter"
+    assert reports[0].key_present is False
+
+
+def test_load_env_file_sets_missing_only(isolated_home, monkeypatch):
+    from app.settings.store import env_file_path, load_env_file
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env_file_path().write_text("OPENAI_API_KEY=sk-from-file\n# comentario\n\n", encoding="utf-8")
+    loaded = load_env_file()
+    assert loaded["OPENAI_API_KEY"] == "sk-from-file"
+    import os
+
+    assert os.environ["OPENAI_API_KEY"] == "sk-from-file"
+
+
+def test_load_env_file_does_not_override(isolated_home, monkeypatch):
+    from app.settings.store import env_file_path, load_env_file
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-del-entorno")
+    env_file_path().write_text("OPENAI_API_KEY=sk-from-file\n", encoding="utf-8")
+    load_env_file()
+    import os
+
+    assert os.environ["OPENAI_API_KEY"] == "sk-del-entorno"

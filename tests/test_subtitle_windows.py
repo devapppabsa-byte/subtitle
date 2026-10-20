@@ -242,3 +242,67 @@ def test_file_logging_writes(tmp_path):
     assert target.endswith("app.log")
     logging.getLogger("subtitle_app.test_probe").info("hola-log")
     assert "hola-log" in (tmp_path / "sub" / "app.log").read_text()
+
+
+def test_ai_section_applies_provider(qapp, tmp_path, monkeypatch):
+    """Validar un proveedor guarda la clave, cambia el engine y hace swap."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    main = _main_window(qapp)
+    swapped = []
+    main._on_engine_change = swapped.append
+
+    from app.settings.store import ValidationReport
+
+    class _Validator:
+        def __call__(self, provider_id, api_key):
+            return ValidationReport(
+                provider=provider_id, key_env="OPENAI_API_KEY",
+                key_present=True, ok=True, detail="2 modelos visibles",
+            )
+
+    main._validator = _Validator()
+    index = main._engine_combo.findData("openai")
+    main._engine_combo.setCurrentIndex(index)
+    main._key_edit.setText("sk-fake-key")
+    main._on_validate_clicked()
+    import time
+
+    for _ in range(50):
+        if swapped:
+            break
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert swapped, "no se aplicó el proveedor"
+    assert main._settings.translation.engine == "openai"
+    from app.settings.store import env_file_path
+
+    assert "OPENAI_API_KEY=sk-fake-key" in env_file_path().read_text()
+    for window in main.windows.values():
+        window.hide()
+
+
+def test_ai_section_rejects_invalid_key(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    main = _main_window(qapp)
+
+    from app.settings.store import ValidationReport
+
+    main._validator = lambda pid, key: ValidationReport(
+        provider=pid, key_env="ANTHROPIC_API_KEY", key_present=True, ok=False,
+        detail="HTTP 401: clave inválida",
+    )
+    index = main._engine_combo.findData("anthropic")
+    main._engine_combo.setCurrentIndex(index)
+    main._key_edit.setText("sk-ant-mala")
+    main._on_validate_clicked()
+    import time
+
+    for _ in range(50):
+        qapp.processEvents()
+        if "401" in main._ai_status.text():
+            break
+        time.sleep(0.02)
+    assert "401" in main._ai_status.text()
+    assert main._settings.translation.engine != "anthropic"
+    for window in main.windows.values():
+        window.hide()

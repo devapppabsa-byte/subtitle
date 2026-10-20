@@ -38,7 +38,10 @@ __all__ = [
     "settings_path",
     "env_file_path",
     "save_settings",
+    "save_env_key",
+    "load_env_file",
     "load_user_settings",
+    "validate_key",
     "validate_api_config",
     "export_logs",
 ]
@@ -51,14 +54,16 @@ ENV_FILE = ".env"
 
 _SECRET_PATTERNS = (
     re.compile(r"\bgsk_[A-Za-z0-9_-]+"),
+    re.compile(r"\bsk-(?:ant-|or-)?[A-Za-z0-9_-]{8,}"),
     re.compile(r"(?i)(api[_-]?key\s*[:=]\s*)(['\"]?)[^'\"\s;]+(\2)"),
 )
 
 
 def redact_secrets(text: str) -> str:
-    """Reemplaza claves (``gsk_*``, ``*_KEY=...``) por ``***``."""
+    """Reemplaza claves (``gsk_*``, ``sk-*``, ``*_KEY=...``) por ``***``."""
     redacted = _SECRET_PATTERNS[0].sub("gsk_***", text)
-    return _SECRET_PATTERNS[1].sub(r"\1***", redacted)
+    redacted = _SECRET_PATTERNS[1].sub("sk-***", redacted)
+    return _SECRET_PATTERNS[2].sub(r"\1***", redacted)
 
 
 def user_config_dir() -> Path:
@@ -133,6 +138,30 @@ def save_env_key(name: str, value: str, path: str | Path | None = None) -> Path:
     return target
 
 
+def load_env_file(path: str | Path | None = None) -> dict[str, str]:
+    """Lee el ``.env`` del usuario SIN pisar variables ya presentes.
+
+    ``save_env_key`` lo escribía pero nadie lo leía; con esto la clave del
+    panel sobrevive a reinicios lanzados desde el menú (sin terminal).
+    """
+    target = Path(path) if path else env_file_path()
+    loaded: dict[str, str] = {}
+    if not target.is_file():
+        return loaded
+    for raw in target.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name = name.strip()
+        value = value.strip().strip("'\"")
+        if not name:
+            continue
+        loaded[name] = value
+        os.environ.setdefault(name, value)
+    return loaded
+
+
 @dataclass
 class ValidationReport:
     """Resultado de ``validate_api_config`` (sin secretos)."""
@@ -149,39 +178,91 @@ def validate_api_config(settings: "AppSettings", *, environ: dict[str, str] | No
     """Verifica la configuración de los proveedores (clave + modelos).
 
     Solo informa presencia de clave y modelos visibles; nunca el secreto.
+    Voz: solo Groq (STT). Traducción: los proveedores de IA del registro.
     """
     import os as _os
 
+    from app.translation.providers import provider_for_engine
+
     env = _os.environ if environ is None else environ
-    reports: list[ValidationReport] = []
     wanted = {
         "voz": (settings.speech.engine, settings.speech.api_key_env or "GROQ_API_KEY"),
-        "traducción": (settings.translation.engine, settings.translation.api_key_env or "GROQ_API_KEY"),
+        "traducción": (settings.translation.engine, settings.translation.api_key_env or ""),
     }
-    for _stage, (engine, key_env) in wanted.items():
-        if engine not in ("groq",):
+    reports: list[ValidationReport] = []
+    for _stage, (engine, explicit_env) in wanted.items():
+        if engine == "groq" and _stage == "voz":
+            key_env = explicit_env or "GROQ_API_KEY"
+            reports.append(_validate_groq(key_env, env))
             continue
+        provider = provider_for_engine(engine)
+        if provider is None:
+            continue  # passthrough/mapping: sin IA, nada que validar
+        key_env = explicit_env or provider.key_env
         present = bool(env.get(key_env))
-        report = ValidationReport(provider="groq", key_env=key_env, key_present=present)
+        report = ValidationReport(provider=provider.id, key_env=key_env, key_present=present)
         if not present:
             report.detail = f"exportá {key_env}"
             reports.append(report)
             continue
-        try:
-            from groq import Groq
-
-            models = sorted(m.id for m in Groq(api_key=env.get(key_env)).models.list().data)
-            report.models = models
-            report.ok = True
-            report.detail = f"{len(models)} modelos visibles"
-        except Exception as exc:
-            report.detail = redact_secrets(str(exc))[:200]
+        report = validate_key(provider.id, env.get(key_env), key_env=key_env)
         reports.append(report)
-    # Deduplica por proveedor cuando voz y traducción comparten clave.
+    # Deduplica por variable de clave cuando voz y traducción comparten proveedor.
     seen: dict[str, ValidationReport] = {}
     for report in reports:
         seen.setdefault(report.key_env, report)
     return list(seen.values())
+
+
+def _validate_groq(key_env: str, env: dict[str, str]) -> ValidationReport:
+    """Ruta Groq (SDK oficial) para la voz: presencia de clave + modelos."""
+    present = bool(env.get(key_env))
+    report = ValidationReport(provider="groq", key_env=key_env, key_present=present)
+    if not present:
+        report.detail = f"exportá {key_env}"
+        return report
+    try:
+        from groq import Groq
+
+        models = sorted(m.id for m in Groq(api_key=env.get(key_env)).models.list().data)
+        report.models = models
+        report.ok = True
+        report.detail = f"{len(models)} modelos visibles"
+    except Exception as exc:
+        report.detail = redact_secrets(str(exc))[:200]
+    return report
+
+
+def validate_key(
+    provider_id: str,
+    api_key: str,
+    *,
+    key_env: str = "",
+    timeout: float = 15.0,
+    transport=None,
+) -> ValidationReport:
+    """Valida UNA clave contra su proveedor listando modelos (sin red si no hay clave).
+
+    ``transport`` permite inyectar ``httpx.MockTransport`` en los tests.
+    """
+    from app.translation.providers import provider_by_id
+
+    provider = provider_by_id(provider_id)
+    key_env = key_env or provider.key_env
+    report = ValidationReport(provider=provider.id, key_env=key_env, key_present=bool(api_key))
+    if not api_key:
+        report.detail = f"exportá {key_env}"
+        return report
+    try:
+        from app.translation.compat import list_models
+
+        models = list_models(provider, api_key, timeout=timeout, transport=transport)
+        report.models = models
+        report.ok = True
+        report.detail = f"{len(models)} modelos visibles"
+    except Exception as exc:
+        report.detail = redact_secrets(str(exc))[:200]
+    return report
 
 
 def export_logs(

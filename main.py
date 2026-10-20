@@ -13,7 +13,13 @@ import sys
 from app.core.factory import build_pipeline, build_renderer
 from app.core.logging import configure_file_logging, configure_logging, get_logger
 from app.settings.config import AppSettings
-from app.settings.store import export_logs, load_user_settings, save_settings, validate_api_config
+from app.settings.store import (
+    export_logs,
+    load_env_file,
+    load_user_settings,
+    save_settings,
+    validate_api_config,
+)
 
 logger = get_logger("main")
 
@@ -38,8 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speech-engine", help="Motor de reconocimiento de voz (scripted, groq).")
     parser.add_argument("--speech-model", help="Modelo de voz (groq: whisper-large-v3-turbo).")
     parser.add_argument("--speech-language", help="Idioma ISO o 'auto' para autodetectar.")
-    parser.add_argument("--translation-engine", help="Motor de traducción (passthrough, mapping, groq).")
-    parser.add_argument("--translation-model", help="Modelo de traducción (groq: openai/gpt-oss-20b).")
+    parser.add_argument(
+        "--translation-engine",
+        help="Motor de traducción (passthrough, mapping, groq, openai, anthropic, openrouter).",
+    )
+    parser.add_argument("--translation-model", help="Modelo de traducción (p. ej. gpt-4o-mini).")
     parser.add_argument("--source-language", help="Idioma de origen ('auto' para detectar).")
     parser.add_argument("--target-language", help="Idioma de destino (uno solo).")
     parser.add_argument(
@@ -107,7 +116,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.list_devices:
         from app.audio.capture import find_monitor_devices, list_audio_devices
-
         devices = list_audio_devices()
         print(f"{'IDX':>3}  {'KIND':<10} IN/OUT  RATE      FLAGS  NAME")
         for dev in devices:
@@ -127,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         for mon in monitors:
             print(f"  #{mon.index} {mon.name}")
         return 0
+    load_env_file()  # claves guardadas por el panel (menú, sin terminal)
     settings = load_user_settings(args.config)
     apply_cli_overrides(settings, args)
     configure_logging(settings.log_level)
@@ -187,7 +196,7 @@ def _run_qt(pipeline, settings, timeout: float | None) -> int:
         print("Ya hay una instancia corriendo; ciérrala antes de abrir otra.")
         return 2
     bridge = PipelineBridge(pipeline, None, poll_ms=settings.latency.poll_ms)
-    window = MainWindow(settings, pipeline, bridge)
+    window = MainWindow(settings, pipeline, bridge, on_engine_change=pipeline.swap_translator)
     window.show()
     configure_file_logging(str(_default_log_path()))
     window.toggle_running()  # arranca capturando sin pulsar Iniciar
