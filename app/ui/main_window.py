@@ -111,7 +111,8 @@ class MainWindow:
         self._engine_combo = QtWidgets.QComboBox(group)
         self._engine_combo.addItem("Sin IA (directo)", None)
         for provider in PROVIDERS.values():
-            self._engine_combo.addItem(provider.label, provider.id)
+            label = f"{provider.label} · gratis" if provider.free_tier else provider.label
+            self._engine_combo.addItem(label, provider.id)
         current = self._current_provider_id()
         index = self._engine_combo.findData(current)
         self._engine_combo.setCurrentIndex(index if index >= 0 else 0)
@@ -120,11 +121,16 @@ class MainWindow:
 
         from PySide6 import QtCore
 
-        class _ValidationRelay(QtCore.QObject):
+        class _Relay(QtCore.QObject):
             result = QtCore.Signal(str, str, str, bool)
 
-        self._relay = _ValidationRelay(group)
+        class _ModelsRelay(QtCore.QObject):
+            loaded = QtCore.Signal(str, object, str)
+
+        self._relay = _Relay(group)
         self._relay.result.connect(self._finish_validation)
+        self._models_relay = _ModelsRelay(group)
+        self._models_relay.loaded.connect(self._finish_models)
 
         self._key_edit = QtWidgets.QLineEdit(group)
         self._key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
@@ -135,11 +141,18 @@ class MainWindow:
         self._validate_btn.clicked.connect(self._on_validate_clicked)
         form.addRow("", self._validate_btn)
 
+        self._model_combo = QtWidgets.QComboBox(group)
+        self._model_combo.setEditable(True)  # permite pegar un id no listado
+        self._model_combo.setEnabled(False)
+        self._model_combo.currentIndexChanged.connect(self._on_model_changed)
+        form.addRow("Modelo:", self._model_combo)
+
         self._ai_status = QtWidgets.QLabel("", group)
         self._ai_status.setWordWrap(True)
         form.addRow("", self._ai_status)
 
         self._validator = None  # inyectable en tests
+        self._models_fetcher = None  # inyectable en tests
         self._refresh_ai_section()
 
     def _current_provider_id(self) -> str | None:
@@ -152,32 +165,111 @@ class MainWindow:
         """Ajusta pistas/estado según el proveedor seleccionado."""
         import os
 
-        from PySide6 import QtWidgets
-
         from app.translation.providers import provider_by_id
 
         provider_id = self._engine_combo.currentData()
-        known = os.environ.get(provider_by_id(provider_id).key_env) if provider_id else ""
+        self._model_combo.blockSignals(True)
+        self._model_combo.clear()
+        self._model_combo.blockSignals(False)
+        self._model_combo.setEnabled(False)
         self._key_edit.setEnabled(provider_id is not None)
         self._validate_btn.setEnabled(provider_id is not None)
         if provider_id is None:
             self._ai_status.setText("Traducción directa: se muestra el texto original.")
             return
+        provider = provider_by_id(provider_id)
+        known = os.environ.get(provider.key_env, "")
         self._key_edit.setPlaceholderText(
             "Clave guardada — pega otra para cambiarla" if known else "Pega la API key del proveedor"
         )
-        self._ai_status.setText(
-            f"{provider_by_id(provider_id).label}: clave {'detectada' if known else 'no detectada'}."
-        )
+        hint = f"{provider.label}: clave {'detectada' if known else 'no detectada'}."
+        if provider.docs_url:
+            hint += f"  ({provider.docs_url})"
+        self._ai_status.setText(hint)
 
     def _on_engine_changed(self, _index: int) -> None:
         self._refresh_ai_section()
+        self._maybe_load_models()
+
+    def _current_key_for(self, provider) -> str:
+        import os
+
+        return self._key_edit.text().strip() or os.environ.get(provider.key_env, "")
+
+    def _maybe_load_models(self) -> None:
+        """Si ya hay clave para el proveedor, rellena el combo de modelos."""
+        from app.translation.providers import provider_by_id
+
+        provider_id = self._engine_combo.currentData()
+        if not provider_id:
+            return
+        provider = provider_by_id(provider_id)
+        api_key = self._current_key_for(provider)
+        if api_key:
+            self._load_models(provider_id, api_key)
+
+    def _load_models(self, provider_id: str, api_key: str) -> None:
+        import threading
+
+        from app.core.logging import get_logger
+
+        self._ai_status.setText("Cargando modelos…")
+
+        def _work() -> None:
+            from app.settings.store import fetch_models
+
+            try:
+                fetcher = self._models_fetcher
+                models = fetcher(provider_id, api_key) if fetcher else fetch_models(provider_id, api_key)
+                self._models_relay.loaded.emit(provider_id, models, "")
+            except Exception as exc:
+                self._models_relay.loaded.emit(provider_id, [], str(exc)[:160])
+            finally:
+                get_logger(__name__).debug("listado de modelos de %s terminado", provider_id)
+
+        threading.Thread(target=_work, name="ai-models", daemon=True).start()
+
+    def _finish_models(self, provider_id: str, models: object, error: str) -> None:
+        """Slot GUI: rellena el combo de modelos del proveedor."""
+        from app.translation.providers import provider_by_id
+
+        if provider_id != self._engine_combo.currentData():
+            return  # el usuario cambió de proveedor mientras se cargaba
+        self._model_combo.blockSignals(True)
+        self._model_combo.clear()
+        items = list(models) if models else []
+        for info in items:
+            model_id = getattr(info, "id", str(info))
+            free = getattr(info, "free", False)
+            suffix = "  · gratis" if free else ""
+            self._model_combo.addItem(f"{model_id}{suffix}", model_id)
+        if not items:
+            self._model_combo.setEnabled(False)
+            self._model_combo.blockSignals(False)
+            provider = provider_by_id(provider_id)
+            if error:
+                self._ai_status.setText(f"{provider.label}: no se pudieron cargar modelos ({error})")
+            return
+        # Selecciona el modelo configurado si está en la lista.
+        wanted = (self._settings.translation.model or "").strip()
+        idx = self._model_combo.findData(wanted)
+        if idx >= 0:
+            self._model_combo.setCurrentIndex(idx)
+        self._model_combo.setEnabled(True)
+        self._model_combo.blockSignals(False)
+        provider = provider_by_id(provider_id)
+        free_count = sum(1 for info in items if getattr(info, "free", False))
+        extra = f" ({free_count} gratis)" if free_count else ""
+        self._ai_status.setText(f"{provider.label}: {len(items)} modelos disponibles{extra}.")
+
+    def _on_model_changed(self, _index: int) -> None:
+        model_id = self._model_combo.currentData()
+        if model_id:
+            self._settings.translation.model = str(model_id)
 
     def _on_validate_clicked(self) -> None:
         """Valida (sin bloquear la GUI) y aplica el proveedor si es válido."""
         import threading
-
-        from PySide6 import QtWidgets
 
         from app.translation.providers import provider_by_id
 
@@ -186,11 +278,7 @@ class MainWindow:
             self._apply_no_ai_engine()
             return
         provider = provider_by_id(provider_id)
-        api_key = self._key_edit.text().strip()
-        if not api_key:
-            import os
-
-            api_key = os.environ.get(provider.key_env, "")
+        api_key = self._current_key_for(provider)
         if not api_key:
             self._ai_status.setText(f"Falta la clave de {provider.label} ({provider.key_env}).")
             return
@@ -212,8 +300,6 @@ class MainWindow:
 
     def _finish_validation(self, provider_id: str, api_key: str, detail: str, ok: bool) -> None:
         """Slot en el hilo GUI: aplica el proveedor o informa del fallo."""
-        from app.core.logging import get_logger
-
         from app.translation.providers import provider_by_id
 
         self._validate_btn.setEnabled(True)
@@ -223,21 +309,29 @@ class MainWindow:
             return
         self._ai_status.setText(f"{provider.label}: ✓ {detail}")
         self._activate_provider(provider, api_key, detail)
+        self._load_models(provider_id, api_key)  # rellena el combo con TODOS los modelos
 
     def _activate_provider(self, provider, api_key: str, detail: str) -> None:
-        """Persiste la clave, la inyecta en el entorno y cambia el motor en vivo."""
+        """Persiste la clave cifrada, la inyecta y cambia el motor en vivo."""
         import os
 
         from app.core.logging import get_logger
-        from app.settings.store import save_env_key
+        from app.settings.keyvault import default_vault
 
         logger = get_logger(__name__)
         os.environ[provider.key_env] = api_key
         self._settings.translation.engine = provider.id
         try:
-            save_env_key(provider.key_env, api_key)
-        except OSError:
-            logger.exception("no se pudo guardar la clave en el .env del usuario")
+            persisted = default_vault().save_key(provider.id, provider.key_env, api_key)
+            if not persisted:
+                self._ai_status.setText(
+                    f"{provider.label}: clave activa en esta sesión (llavero no disponible, no se guardó)."
+                )
+        except Exception:
+            logger.exception("no se pudo guardar la clave cifrada de %s", provider.id)
+        selected = self._model_combo.currentData() or self._settings.translation.model
+        if selected:
+            self._settings.translation.model = str(selected)
         self._swap_translator(provider.id, api_key)
 
     def _apply_no_ai_engine(self) -> None:
@@ -252,7 +346,10 @@ class MainWindow:
 
         try:
             translator = build_translation_engine(
-                provider_id, api_key=api_key, translation=self._settings.translation
+                provider_id,
+                api_key=api_key,
+                model=self._settings.translation.model,
+                translation=self._settings.translation,
             )
             if self._on_engine_change is not None:
                 self._on_engine_change(translator)

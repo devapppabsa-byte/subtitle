@@ -15,7 +15,7 @@ from app.core.logging import configure_file_logging, configure_logging, get_logg
 from app.settings.config import AppSettings
 from app.settings.store import (
     export_logs,
-    load_env_file,
+    load_saved_keys,
     load_user_settings,
     save_settings,
     validate_api_config,
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speech-language", help="Idioma ISO o 'auto' para autodetectar.")
     parser.add_argument(
         "--translation-engine",
-        help="Motor de traducción (passthrough, mapping, groq, openai, anthropic, openrouter).",
+        help="Motor de traducción (passthrough, mapping, groq, openai, anthropic, openrouter, gemini).",
     )
     parser.add_argument("--translation-model", help="Modelo de traducción (p. ej. gpt-4o-mini).")
     parser.add_argument("--source-language", help="Idioma de origen ('auto' para detectar).")
@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         for mon in monitors:
             print(f"  #{mon.index} {mon.name}")
         return 0
-    load_env_file()  # claves guardadas por el panel (menú, sin terminal)
+    load_saved_keys()  # claves cifradas de la BD (migra el .env antiguo si existe)
     settings = load_user_settings(args.config)
     apply_cli_overrides(settings, args)
     configure_logging(settings.log_level)

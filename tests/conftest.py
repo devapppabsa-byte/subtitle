@@ -50,3 +50,34 @@ def chunk_factory():
 @pytest.fixture
 def collecting_renderer():
     return CollectingRenderer()
+
+
+class FakeLlavero:
+    """Llavero en memoria para tests (evita secret-tool)."""
+
+    def __init__(self) -> None:
+        self._store = {}
+
+    def available(self) -> bool:
+        return True
+
+    def load(self):
+        return self._store.get("master")
+
+    def store(self, master: bytes) -> None:
+        self._store["master"] = master
+
+
+@pytest.fixture
+def fake_vault(tmp_path, monkeypatch):
+    """Un KeyVault con clave maestra en memoria, aislado en tmp_path."""
+    import secrets
+
+    from app.settings import keyvault
+
+    vault = keyvault.KeyVault(
+        tmp_path / "keys.db", llavero=FakeLlavero(), master=secrets.token_bytes(32)
+    )
+    monkeypatch.setattr(keyvault, "db_path", lambda: tmp_path / "keys.db")
+    monkeypatch.setattr(keyvault, "default_vault", lambda: vault)
+    return vault

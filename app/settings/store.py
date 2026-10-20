@@ -43,6 +43,7 @@ __all__ = [
     "load_user_settings",
     "validate_key",
     "validate_api_config",
+    "fetch_models",
     "export_logs",
 ]
 
@@ -141,8 +142,9 @@ def save_env_key(name: str, value: str, path: str | Path | None = None) -> Path:
 def load_env_file(path: str | Path | None = None) -> dict[str, str]:
     """Lee el ``.env`` del usuario SIN pisar variables ya presentes.
 
-    ``save_env_key`` lo escribía pero nadie lo leía; con esto la clave del
-    panel sobrevive a reinicios lanzados desde el menú (sin terminal).
+    Compatibilidad: desde la Fase 9 las claves viven cifradas en SQLite
+    (``app.settings.keyvault``); este lector se conserva para migrar el fichero
+    antiguo y para instalaciones que aún lo usen.
     """
     target = Path(path) if path else env_file_path()
     loaded: dict[str, str] = {}
@@ -159,6 +161,27 @@ def load_env_file(path: str | Path | None = None) -> dict[str, str]:
             continue
         loaded[name] = value
         os.environ.setdefault(name, value)
+    return loaded
+
+
+def load_saved_keys(*, environ: dict[str, str] | None = None) -> dict[str, str]:
+    """Carga las claves cifradas de la BD en el entorno (migrando el ``.env`` si existe).
+
+    Punto único que usa ``main.py`` al arrancar. Nunca escribe claves en claro.
+    """
+    from app.settings.keyvault import default_vault
+    from app.translation.providers import PROVIDERS
+
+    env = os.environ if environ is None else environ
+    vault = default_vault()
+    try:
+        vault.migrate_from_env_file()
+    except Exception:  # pragma: no cover - migración best-effort
+        logger.exception("fallo al migrar el .env antiguo al almacén cifrado")
+    mapping = {p.id: p.key_env for p in PROVIDERS.values()}
+    loaded = vault.load_all_into_environ(mapping)
+    for name, value in loaded.items():
+        env.setdefault(name, value)
     return loaded
 
 
@@ -263,6 +286,40 @@ def validate_key(
     except Exception as exc:
         report.detail = redact_secrets(str(exc))[:200]
     return report
+
+
+def fetch_models(
+    provider_id: str,
+    api_key: str,
+    *,
+    timeout: float = 15.0,
+    transport=None,
+    use_cache: bool = True,
+) -> list["object"]:
+    """Modelos disponibles del proveedor, con caché en la BD (``ModelInfo``).
+
+    Si la llamada de red falla, cae a la caché (si la hay); si no hay caché,
+    propaga el error. La caché se refresca en cada llamada con éxito.
+    """
+    from app.settings.keyvault import KeyVault, db_path
+    from app.translation.compat import list_models_detailed
+    from app.translation.providers import provider_by_id
+
+    provider = provider_by_id(provider_id)
+    vault = KeyVault(db_path())
+    try:
+        models = list_models_detailed(provider, api_key, timeout=timeout, transport=transport)
+        vault.cache_models(provider_id, [(m.id, m.free) for m in models])
+        return models
+    except Exception:
+        if use_cache:
+            cached = vault.cached_models(provider_id)
+            if cached:
+                from app.translation.compat import ModelInfo
+
+                logger.warning("fallo al listar modelos de %s; se usa la caché", provider_id)
+                return [ModelInfo(id=mid, free=free) for mid, free in cached]
+        raise
 
 
 def export_logs(

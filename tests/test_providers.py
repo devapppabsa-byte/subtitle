@@ -19,9 +19,11 @@ from app.translation.providers import (
 
 # -- registro ---------------------------------------------------------------
 def test_registry_has_expected_providers():
-    assert set(PROVIDERS) == {"groq", "openai", "anthropic", "openrouter"}
+    assert set(PROVIDERS) >= {"groq", "openai", "anthropic", "openrouter", "gemini"}
     assert PROVIDERS["anthropic"].style == "anthropic"
     assert PROVIDERS["openai"].key_env == "OPENAI_API_KEY"
+    assert PROVIDERS["gemini"].free_tier is True
+    assert PROVIDERS["gemini"].base_url.endswith("/openai")
 
 
 def test_provider_for_engine():
@@ -37,7 +39,7 @@ def test_provider_by_id_unknown_raises():
 
 
 def test_all_registered_engines_map():
-    for engine in ("groq", "openai", "anthropic", "openrouter", "passthrough", "mapping"):
+    for engine in ("groq", "openai", "anthropic", "openrouter", "gemini", "passthrough", "mapping"):
         assert engine in ENGINE_TO_PROVIDER
 
 
@@ -179,3 +181,36 @@ def test_chat_translator_requires_key_without_client():
     tr = ChatTranslator(provider_by_id("anthropic"), None)
     with pytest.raises(ConfigurationError):
         tr._ensure_client()
+
+
+# -- list_models_detailed ---------------------------------------------------
+def test_list_models_detailed_marks_free():
+    from app.translation.compat import list_models_detailed
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [
+            {"id": "nvidia/x:free", "name": "X Free", "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini",
+             "pricing": {"prompt": "0.00000015", "completion": "0.0000006"}},
+        ]})
+
+    models = list_models_detailed(
+        provider_by_id("openrouter"), "sk-or", transport=httpx.MockTransport(handler)
+    )
+    by_id = {m.id: m for m in models}
+    assert by_id["nvidia/x:free"].free is True
+    assert by_id["openai/gpt-4o-mini"].free is False
+    # los gratuitos primero
+    assert models[0].id == "nvidia/x:free"
+
+
+def test_list_models_detailed_pricing_zero_is_free():
+    from app.translation.compat import list_models_detailed
+
+    handler = lambda req: httpx.Response(200, json={"data": [
+        {"id": "modelo-gratis", "pricing": {"prompt": "0", "completion": "0"}}
+    ]})
+    models = list_models_detailed(
+        provider_by_id("openai"), "sk-x", transport=httpx.MockTransport(handler)
+    )
+    assert models[0].free is True

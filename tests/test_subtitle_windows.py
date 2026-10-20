@@ -244,8 +244,8 @@ def test_file_logging_writes(tmp_path):
     assert "hola-log" in (tmp_path / "sub" / "app.log").read_text()
 
 
-def test_ai_section_applies_provider(qapp, tmp_path, monkeypatch):
-    """Validar un proveedor guarda la clave, cambia el engine y hace swap."""
+def test_ai_section_applies_provider(qapp, tmp_path, monkeypatch, fake_vault):
+    """Validar un proveedor guarda la clave cifrada, cambia engine y hace swap."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     main = _main_window(qapp)
     swapped = []
@@ -261,6 +261,7 @@ def test_ai_section_applies_provider(qapp, tmp_path, monkeypatch):
             )
 
     main._validator = _Validator()
+    main._models_fetcher = lambda pid, key: []
     index = main._engine_combo.findData("openai")
     main._engine_combo.setCurrentIndex(index)
     main._key_edit.setText("sk-fake-key")
@@ -274,9 +275,9 @@ def test_ai_section_applies_provider(qapp, tmp_path, monkeypatch):
         time.sleep(0.02)
     assert swapped, "no se aplicó el proveedor"
     assert main._settings.translation.engine == "openai"
-    from app.settings.store import env_file_path
-
-    assert "OPENAI_API_KEY=sk-fake-key" in env_file_path().read_text()
+    assert fake_vault.load_key("openai") == "sk-fake-key"
+    # La clave NUNCA está en claro en la BD.
+    assert b"sk-fake-key" not in (tmp_path / "keys.db").read_bytes()
     for window in main.windows.values():
         window.hide()
 
@@ -304,5 +305,42 @@ def test_ai_section_rejects_invalid_key(qapp, tmp_path, monkeypatch):
         time.sleep(0.02)
     assert "401" in main._ai_status.text()
     assert main._settings.translation.engine != "anthropic"
+    for window in main.windows.values():
+        window.hide()
+
+
+def test_ai_section_fills_models_combo(qapp, tmp_path, monkeypatch):
+    """Al validar, el combo de modelos se rellena con los modelos del proveedor."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    main = _main_window(qapp)
+    main._on_engine_change = lambda t: None
+
+    from app.settings.store import ValidationReport
+    from app.translation.compat import ModelInfo
+
+    main._validator = lambda pid, key: ValidationReport(
+        provider=pid, key_env="OPENROUTER_API_KEY", key_present=True, ok=True, detail="ok",
+    )
+    main._models_fetcher = lambda pid, key: [
+        ModelInfo(id="nvidia/x:free", free=True),
+        ModelInfo(id="openai/gpt-4o-mini", free=False),
+    ]
+    index = main._engine_combo.findData("openrouter")
+    main._engine_combo.setCurrentIndex(index)
+    main._key_edit.setText("sk-or-fake")
+    main._on_validate_clicked()
+    import time
+
+    for _ in range(60):
+        qapp.processEvents()
+        if main._model_combo.count() >= 2:
+            break
+        time.sleep(0.02)
+    assert main._model_combo.count() == 2
+    assert main._model_combo.itemData(0) == "nvidia/x:free"
+    assert main._model_combo.isEnabled()
+    # Elegir un modelo lo persiste en settings.
+    main._model_combo.setCurrentIndex(1)
+    assert main._settings.translation.model == "openai/gpt-4o-mini"
     for window in main.windows.values():
         window.hide()

@@ -231,3 +231,44 @@ def test_load_env_file_does_not_override(isolated_home, monkeypatch):
     import os
 
     assert os.environ["OPENAI_API_KEY"] == "sk-del-entorno"
+
+
+def test_fetch_models_caches_in_db(isolated_home, fake_vault):
+    import httpx
+
+    from app.settings.store import fetch_models
+
+    handler = lambda req: httpx.Response(200, json={"data": [
+        {"id": "gpt-4o-mini", "pricing": {"prompt": "0.1", "completion": "0.2"}},
+    ]})
+    models = fetch_models("openai", "sk-x", transport=httpx.MockTransport(handler))
+    assert [m.id for m in models] == ["gpt-4o-mini"]
+    assert fake_vault.cached_models("openai") == [("gpt-4o-mini", False)]
+
+
+def test_fetch_models_falls_back_to_cache(isolated_home, fake_vault):
+    import httpx
+
+    from app.settings.store import fetch_models
+
+    fake_vault.cache_models("openai", [("gpt-4o-mini", False)])
+
+    def boom(req):
+        raise httpx.ConnectError("sin red")
+
+    models = fetch_models("openai", "sk-x", transport=httpx.MockTransport(boom))
+    assert [m.id for m in models] == ["gpt-4o-mini"]
+
+
+def test_fetch_models_no_cache_propagates(isolated_home, fake_vault):
+    import httpx
+    import pytest as _pytest
+
+    from app.core.errors import TranslationError
+    from app.settings.store import fetch_models
+
+    def boom(req):
+        raise httpx.ConnectError("sin red")
+
+    with _pytest.raises(TranslationError):
+        fetch_models("openai", "sk-x", transport=httpx.MockTransport(boom))

@@ -48,6 +48,27 @@ Salida esperada (los parciales se reescriben y el final llega traducido):
 ▸ los subtítulos funcionan
 ```
 
+## Proveedores de IA y claves
+
+El panel **Motor IA** permite elegir el proveedor de traducción y pegar su API key:
+
+| Proveedor | Variable | Gratis |
+|---|---|---|
+| Groq | `GROQ_API_KEY` | sí |
+| OpenAI | `OPENAI_API_KEY` | no |
+| Claude (Anthropic) | `ANTHROPIC_API_KEY` | no |
+| OpenRouter | `OPENROUTER_API_KEY` | sí (`:free`) |
+| Google Gemini | `GEMINI_API_KEY` | sí |
+
+Tras validar la clave, la app lista **todos los modelos** del proveedor (los
+gratuitos van primero y marcados) y cambia el motor en vivo.
+
+**Las claves se guardan cifradas** en `~/.config/traductor-tiempo-real/keys.db`
+(SQLite, modo 600). La clave maestra vive en el **llavero del sistema**
+(`secret-tool`/libsecret); nunca hay secretos en claro ni en la BD ni en logs.
+Si el llavero no está disponible, la clave solo vive en memoria durante la sesión.
+El antiguo `.env` se migra a la BD cifrada al arrancar.
+
 ## Tests
 
 ```bash
@@ -64,7 +85,7 @@ app/
 ├── translation/   # Translator + TranslationResult (passthrough, diccionario)
 ├── subtitles/     # SubtitleCue/SubtitleStyle + SubtitleRenderer
 ├── overlay/       # renderizadores concretos (consola, Qt perezoso)
-├── settings/      # AppSettings (JSON + variables de entorno)
+├── settings/      # AppSettings (JSON + entorno) y keyvault (claves cifradas SQLite)
 └── ui/            # panel de control (fases posteriores)
 ```
 

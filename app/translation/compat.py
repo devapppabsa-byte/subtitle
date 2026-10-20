@@ -12,6 +12,7 @@ cuerpo HTTP resumido.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -23,7 +24,7 @@ from app.core.logging import get_logger
 if TYPE_CHECKING:  # pragma: no cover
     from app.translation.providers import Provider
 
-__all__ = ["chat_complete", "list_models"]
+__all__ = ["ModelInfo", "chat_complete", "list_models", "list_models_detailed"]
 
 logger = get_logger(__name__)
 
@@ -93,6 +94,61 @@ def list_models(
     if not isinstance(items, list):  # respuesta inesperada: clave válida pero forma rara
         raise TranslationError(f"{provider.label}: respuesta inesperada de /models.")
     return sorted(str(item.get("id", "")) for item in items if isinstance(item, dict) and item.get("id"))
+
+
+@dataclass(frozen=True)
+class ModelInfo:
+    """Modelo listado por un proveedor (id, nombre y si es gratis)."""
+
+    id: str
+    name: str = ""
+    free: bool = False
+
+
+def _is_free(provider: "Provider", item: dict) -> bool:
+    """``:free`` en el id (OpenRouter) o precio 0 en ``pricing``."""
+    model_id = str(item.get("id", ""))
+    if model_id.endswith(":free"):
+        return True
+    pricing = item.get("pricing")
+    if isinstance(pricing, dict) and pricing:
+        try:
+            return all(float(pricing.get(k, "0") or 0) == 0 for k in ("prompt", "completion"))
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def list_models_detailed(
+    provider: "Provider",
+    api_key: str,
+    *,
+    timeout: float = 15.0,
+    transport: httpx.BaseTransport | None = None,
+) -> list[ModelInfo]:
+    """Modelos con metadatos: nombre legible y marca ``free`` cuando aplique."""
+    if not api_key:
+        raise TranslationError(f"Falta la clave de {provider.label} ({provider.key_env}).")
+    data = _request(
+        provider, api_key, method="GET", path="models", timeout=timeout, transport=transport
+    )
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise TranslationError(f"{provider.label}: respuesta inesperada de /models.")
+    models: list[ModelInfo] = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        model_id = str(item["id"])
+        models.append(
+            ModelInfo(
+                id=model_id,
+                name=str(item.get("name") or model_id),
+                free=_is_free(provider, item),
+            )
+        )
+    models.sort(key=lambda m: (not m.free, m.id))
+    return models
 
 
 def _split_system(messages: list[dict]) -> tuple[str | None, list[dict]]:
