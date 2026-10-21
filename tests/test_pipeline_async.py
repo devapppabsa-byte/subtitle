@@ -186,6 +186,22 @@ def test_bridge_start_stop_lifecycle():
     assert pipeline.running is False
 
 
+def test_bridge_emits_finished_once():
+    """Dos centinelas en cola no re-emiten ``finished`` (bucle de reinicio)."""
+    from app.ui.bridge import PipelineBridge
+
+    fake = types.SimpleNamespace(cues=Queue())
+    bridge = PipelineBridge(fake, None)
+    seen: list[str] = []
+    bridge.finished.connect(seen.append)
+    fake.cues.put(_cue("u0", "hola", 0.0))
+    fake.cues.put(PipelineFinished("completed"))
+    fake.cues.put(PipelineFinished("completed"))  # centinela extra del cierre
+    bridge._drain()
+    assert seen == ["completed"]
+    assert bridge._finished_emitted is True
+
+
 def test_swap_translator_hot_swaps_while_running():
     from app.core.pipeline import SubtitlePipeline
     from app.audio.synthetic import SyntheticAudioSource

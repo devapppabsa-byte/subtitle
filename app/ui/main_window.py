@@ -414,15 +414,20 @@ class MainWindow:
 
         (Antes esto cerraba la app; por eso el lanzador “se abría y cerraba solo”
         con el demo sintético de 5 s.)
+
+        Idempotente: si ya está detenido, no toca nada. El bridge ya paró su
+        bombeo antes de emitir, así que aquí no se vuelve a llamar ``stop()``
+        (hacerlo re-arrancaba por señales ``finished`` repetidas).
         """
-        if self._running:
-            try:
-                self._bridge.stop()
-            except Exception:
-                pass
-            self._running = False
+        from app.core.logging import get_logger
+
+        if not self._running:
+            get_logger(__name__).debug("finished ignorado (ya detenido): %s", reason)
+            return
+        self._running = False
         self._toggle.setText("Iniciar")
         self._status.setText(f"Finalizado ({reason}) — pulsa Iniciar")
+        get_logger(__name__).info("pipeline finalizado: %s", reason)
 
     def update_subtitle(self, language: str, text: str, *, is_final: bool = True) -> None:
         """Actualiza el texto de la ventana del idioma (creándola si falta)."""

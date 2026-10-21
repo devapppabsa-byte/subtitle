@@ -232,6 +232,37 @@ def test_finished_keeps_panel_open(qapp):
         window.hide()
 
 
+def test_finished_is_idempotent(qapp):
+    """Un segundo ``finished`` no re-arranca ni cambia el estado."""
+    main = _main_window(qapp)
+    main.toggle_running()
+    main.on_pipeline_finished("completed")
+    state = (main._running, main._toggle.text(), main._status.text())
+    main.on_pipeline_finished("completed")
+    assert (main._running, main._toggle.text(), main._status.text()) == state
+    assert main._running is False
+    for window in main.windows.values():
+        window.hide()
+
+
+def test_qt_defaults_synthetic_to_monitor(qapp):
+    """Sin --audio, el arranque gráfico no usa el demo sintético finito."""
+    import main as entry
+
+    settings = _main_window(qapp)._settings
+    settings.audio.source = "synthetic"
+    settings.overlay.renderer = "qt"
+
+    args = entry.build_parser().parse_args(["--renderer", "qt"])
+    entry.use_qt_default_source(settings, args)
+    assert settings.audio.source == "monitor"
+
+    settings.audio.source = "synthetic"
+    demo = entry.build_parser().parse_args(["--renderer", "qt", "--audio", "synthetic"])
+    entry.use_qt_default_source(settings, demo)
+    assert settings.audio.source == "synthetic"
+
+
 def test_file_logging_writes(tmp_path):
     import logging
 

@@ -59,6 +59,7 @@ class PipelineBridge(QObject):
         self.finished.connect(self._on_finished)
         self._last_start = -1.0
         self._stale_ignored = 0
+        self._finished_emitted = False
 
     # -- slots públicos (hilo GUI) --------------------------------------
     def set_router(self, router) -> None:
@@ -71,6 +72,7 @@ class PipelineBridge(QObject):
 
     def start(self) -> None:
         """Arranca pipeline, renderizador y bombeo (``start_pipeline``)."""
+        self._finished_emitted = False
         self._pipeline.start()
         if self._renderer is not None:
             self._renderer.start()
@@ -98,6 +100,11 @@ class PipelineBridge(QObject):
             except Empty:
                 return
             if isinstance(event, PipelineFinished):
+                if self._finished_emitted:
+                    continue
+                self._finished_emitted = True
+                self._timer.stop()
+                self._discard_finished()
                 self.finished.emit(event.reason)
                 return
             start = event.start_time or 0.0
@@ -105,6 +112,25 @@ class PipelineBridge(QObject):
                 self._stale_ignored += 1
                 continue
             self._last_start = start
+            self.cueReceived.emit(event)
+
+    def _discard_finished(self) -> None:
+        """Descarta ``PipelineFinished`` pendientes para no re-emitir.
+
+        El cierre del pipeline puede publicar más de un centinela (el
+        ``finally`` de la captura propaga el suyo además del normal); sin esto
+        el panel veía varios ``finished`` seguidos y re-arrancaba.
+        """
+        from app.core.events import PipelineFinished
+
+        while True:
+            try:
+                event = self._pipeline.cues.get_nowait()
+            except Empty:
+                return
+            if isinstance(event, PipelineFinished):
+                continue
+            self._last_start = max(self._last_start, event.start_time or 0.0)
             self.cueReceived.emit(event)
 
     def _on_cue(self, cue: "SubtitleCue") -> None:

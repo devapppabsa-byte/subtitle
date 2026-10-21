@@ -112,6 +112,22 @@ def apply_cli_overrides(settings: AppSettings, args: argparse.Namespace) -> None
         settings.log_level = args.log_level
 
 
+def use_qt_default_source(settings: AppSettings, args: argparse.Namespace) -> None:
+    """Sin ``--audio``, el arranque gráfico usa el audio del sistema.
+
+    El menú/.desktop lanza ``--renderer qt`` sin ``--audio``; si heredara un
+    ``synthetic`` finito de ``settings.json`` el demo se agotaría al instante y
+    el panel parpadearía. ``--audio synthetic`` sigue siendo el modo demo.
+    """
+    if (
+        settings.overlay.renderer == "qt"
+        and args.audio is None
+        and settings.audio.source == "synthetic"
+    ):
+        logger.info("arranque gráfico sin --audio: usando monitor del sistema")
+        settings.audio.source = "monitor"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.list_devices:
@@ -163,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         or settings.translation.target_language,
     )
 
+    use_qt_default_source(settings, args)
     pipeline = build_pipeline(settings)
     renderer = build_renderer(settings)
     if settings.overlay.renderer == "qt":
