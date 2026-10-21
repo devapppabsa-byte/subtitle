@@ -37,6 +37,21 @@ python3 main.py --translation-engine mapping --realtime
 python3 main.py --config assets/config.example.json
 ```
 
+### Lanzador `run.sh`
+
+Atajo para el uso diario (crea/configura el venv y evita repetir flags):
+
+```bash
+./run.sh                              # audio del sistema (monitor) + Groq
+./run.sh --audio synthetic --realtime # demo, sin red ni clave
+./run.sh --list-devices               # ver monitores/dispositivos
+```
+
+Sin argumentos arranca en modo gráfico (`--renderer qt`) sobre el audio del
+sistema con Groq. Cualquier flag extra se pasa tal cual a la app. Usa el venv
+`./.venv` (`VENV_DIR` es configurable) y lee las claves de la BD cifrada; no
+maneja secretos.
+
 Salida esperada (los parciales se reescriben y el final llega traducido):
 
 ```
