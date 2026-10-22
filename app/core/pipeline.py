@@ -78,6 +78,7 @@ class SubtitlePipeline:
         latency: LatencyTracker | None = None,
     ) -> None:
         self._source = audio_source
+        self._source_lock = threading.Lock()
         self._recognizer = recognizer
         self._translator = translator
         self._translator_lock = threading.Lock()
@@ -119,6 +120,21 @@ class SubtitlePipeline:
     @property
     def translator(self) -> Translator:
         return self._translator
+
+    def set_source(self, source: AudioSource) -> None:
+        """Sustituye la fuente de audio (origen elegido en el panel).
+
+        A diferencia de :meth:`swap_translator`, la fuente se lee en el bucle
+        de captura, así que **debe** estar parado el pipeline al llamar esto
+        (la UI hace stop → set_source → start).
+        """
+        if not isinstance(source, AudioSource):
+            raise TypeError("set_source espera un AudioSource")
+        if self.running:
+            raise RuntimeError("set_source requiere el pipeline parado")
+        with self._source_lock:
+            self._source = source
+        logger.info("fuente de audio sustituida: %s", type(source).__name__)
 
     def swap_translator(self, translator: Translator) -> None:
         """Sustituye el traductor en caliente (proveedor elegido en el panel).
@@ -196,8 +212,10 @@ class SubtitlePipeline:
         """Arranca etapas e hilos de trabajo. Idempotente (``start_pipeline``)."""
         if self._started:
             return
-        self._source.start()
-        self._recognizer.configure(self._source.sample_rate, 1)
+        with self._source_lock:
+            source = self._source
+        source.start()
+        self._recognizer.configure(source.sample_rate, 1)
         self._recognizer.start()
         self._translator.start()
 
@@ -294,9 +312,14 @@ class SubtitlePipeline:
     def _capture_loop(self) -> None:
         try:
             while not self._stop_event.is_set():
-                chunk = self._source.read(timeout=self._read_timeout)
+                with self._source_lock:
+                    source = self._source
+                chunk = source.read(timeout=self._read_timeout)
                 if chunk is None:
-                    if not self._source.running:
+                    if self._stop_event.is_set():
+                        # Parada ordenada: la fuente se calló, no se agotó.
+                        break
+                    if not source.running:
                         logger.info("fuente de audio agotada")
                         break
                     continue

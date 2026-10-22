@@ -186,6 +186,31 @@ def test_bridge_start_stop_lifecycle():
     assert pipeline.running is False
 
 
+def test_set_source_replaces_audio_source():
+    """Cambiar el origen de audio en caliente (stop → set → start)."""
+    pipeline = _pipeline()
+    nueva = SyntheticAudioSource(total_duration=2.0)
+    pipeline.set_source(nueva)
+    assert pipeline.audio_source is nueva
+    pipeline.start()
+    assert pipeline.running is True
+    pipeline.stop()
+
+
+def test_set_source_requires_stopped_pipeline():
+    pipeline = _pipeline()
+    pipeline.start()
+    with pytest.raises(RuntimeError):
+        pipeline.set_source(SyntheticAudioSource(total_duration=1.0))
+    pipeline.stop()
+
+
+def test_set_source_rejects_invalid_type():
+    pipeline = _pipeline()
+    with pytest.raises(TypeError):
+        pipeline.set_source("no soy una fuente")
+
+
 def test_bridge_emits_finished_once():
     """Dos centinelas en cola no re-emiten ``finished`` (bucle de reinicio)."""
     from app.ui.bridge import PipelineBridge

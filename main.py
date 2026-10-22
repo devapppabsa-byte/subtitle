@@ -31,10 +31,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", help="Ruta a un archivo JSON de configuración.")
     parser.add_argument("--duration", type=float, default=None, help="Segundos de ejecución (por defecto: hasta que termine el audio).")
-    parser.add_argument("--audio", choices=["synthetic", "wav", "microphone", "monitor"], help="Origen de audio.")
+    parser.add_argument(
+        "--audio",
+        choices=["synthetic", "wav", "microphone", "monitor", "app"],
+        help="Origen de audio.",
+    )
     parser.add_argument("--audio-path", help="Ruta del WAV cuando --audio=wav.")
     parser.add_argument("--audio-device", help="Índice o parte del nombre (None = auto).")
+    parser.add_argument(
+        "--stream",
+        help="Stream a capturar con --audio=app: 'aplicación::título' (p. ej. 'chromium::YouTube').",
+    )
+    parser.add_argument(
+        "--stream-loopback",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Con --audio=app, seguir oyendo el audio capturado por los parlantes (por defecto: sí).",
+    )
     parser.add_argument("--list-devices", action="store_true", help="Lista dispositivos y monitores, luego sale.")
+    parser.add_argument(
+        "--list-streams",
+        action="store_true",
+        help="Lista las apps/pestañas que están reproduciendo audio, luego sale.",
+    )
     parser.add_argument(
         "--realtime",
         action=argparse.BooleanOptionalAction,
@@ -76,6 +95,10 @@ def apply_cli_overrides(settings: AppSettings, args: argparse.Namespace) -> None
         settings.audio.path = args.audio_path
     if args.audio_device is not None:
         settings.audio.device = args.audio_device
+    if args.stream is not None:
+        settings.audio.stream_spec = args.stream
+    if args.stream_loopback is not None:
+        settings.audio.stream_loopback = args.stream_loopback
     if args.realtime is not None:
         settings.audio.realtime = args.realtime
     if args.speech_engine is not None:
@@ -150,6 +173,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nMonitores del sistema: {len(monitors)}")
         for mon in monitors:
             print(f"  #{mon.index} {mon.name}")
+        return 0
+    if args.list_streams:
+        from app.audio.streams import list_audio_streams
+
+        streams = list_audio_streams()
+        if not streams:
+            print("No hay ninguna app o pestaña reproduciendo audio ahora mismo.")
+            print("Reproducí algo y volvé a ejecutarlo.")
+            return 0
+        print(f"{'IDX':>3}  {'APLICACIÓN':<16} TÍTULO")
+        for stream in streams:
+            print(f"{stream.index:>3}  {stream.app or '?':<16} {stream.title}")
+            print(f"     → --stream '{stream.spec}'")
         return 0
     load_saved_keys()  # claves cifradas de la BD (migra el .env antiguo si existe)
     settings = load_user_settings(args.config)

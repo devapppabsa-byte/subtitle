@@ -56,6 +56,20 @@ def build_audio_source(settings: AppSettings) -> AudioSource:
             target_rate=audio.sample_rate,
             chunk_duration=audio.chunk_duration,
         )
+    if audio.source == "app":
+        from app.audio.app_source import AppStreamAudioSource
+
+        if not audio.stream_spec:
+            raise ConfigurationError(
+                "audio.stream_spec es obligatorio para la fuente 'app' "
+                "(elegí una aplicación o pestaña en el panel)."
+            )
+        return AppStreamAudioSource(
+            audio.stream_spec,
+            loopback=audio.stream_loopback,
+            target_rate=audio.sample_rate,
+            chunk_duration=audio.chunk_duration,
+        )
     raise ConfigurationError(f"Origen de audio desconocido: {audio.source!r}")
 
 

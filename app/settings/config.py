@@ -34,12 +34,18 @@ class AudioSettings:
     """De dónde sale el audio y cómo se captura."""
 
     source: str = "synthetic"
-    """``synthetic`` | ``wav`` | ``microphone`` | ``monitor``."""
+    """``synthetic`` | ``wav`` | ``microphone`` | ``monitor`` | ``app``."""
 
     device: str | None = None
     """Índice, subcadena del nombre o None (auto: monitor preferido / entrada por defecto)."""
     path: str | None = None
     """Ruta del WAV cuando ``source == "wav"``."""
+
+    stream_spec: str | None = None
+    """Stream a capturar cuando ``source == "app"``: ``"binario::título"``."""
+
+    stream_loopback: bool = True
+    """Si el audio capturado sigue sonando por los parlantes (loopback)."""
 
     sample_rate: int = 16_000
     chunk_duration: float = 0.5

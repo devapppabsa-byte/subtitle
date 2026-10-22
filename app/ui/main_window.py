@@ -51,6 +51,7 @@ class MainWindow:
         self._toggle.clicked.connect(self.toggle_running)
         layout.addWidget(self._toggle)
 
+        self._build_audio_section(central, layout)
         self._build_ai_section(central, layout)
 
         self._langs = QtWidgets.QGroupBox("Idiomas (ventanas)", central)
@@ -94,6 +95,176 @@ class MainWindow:
         self._enabled: set[str] = set(self._active_languages())
         self._rebuild_language_checks()
         bridge.set_router(self._route_cue)
+
+    # -- sección "Origen de audio" -----------------------------------------
+    def _build_audio_section(self, central, layout) -> None:
+        """Selector de dónde sale el audio (todo el sistema, app o pestaña…)."""
+        from PySide6 import QtCore, QtWidgets
+
+        group = QtWidgets.QGroupBox("Origen de audio", central)
+        form = QtWidgets.QFormLayout(group)
+        layout.addWidget(group)
+        self._audio_group = group
+
+        class _StreamsRelay(QtCore.QObject):
+            loaded = QtCore.Signal(object, str)
+
+        self._streams_relay = _StreamsRelay(group)
+        self._streams_relay.loaded.connect(self._finish_streams)
+
+        self._origin_combo = QtWidgets.QComboBox(group)
+        for label, value in (
+            ("Todo el sistema (monitor)", "monitor"),
+            ("Aplicación o pestaña", "app"),
+            ("Micrófono", "microphone"),
+            ("Demo (sintético)", "synthetic"),
+            ("Archivo WAV", "wav"),
+        ):
+            self._origin_combo.addItem(label, value)
+        index = self._origin_combo.findData(self._settings.audio.source)
+        self._origin_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._origin_combo.currentIndexChanged.connect(self._on_origin_changed)
+        form.addRow("Origen:", self._origin_combo)
+
+        self._stream_combo = QtWidgets.QComboBox(group)
+        self._stream_combo.setEnabled(False)
+        form.addRow("App / pestaña:", self._stream_combo)
+
+        self._refresh_streams_btn = QtWidgets.QPushButton("Actualizar", group)
+        self._refresh_streams_btn.clicked.connect(self._on_refresh_streams)
+        form.addRow("", self._refresh_streams_btn)
+
+        self._loopback_check = QtWidgets.QCheckBox("Seguir oyendo por los parlantes", group)
+        self._loopback_check.setChecked(self._settings.audio.stream_loopback)
+        form.addRow("", self._loopback_check)
+
+        self._apply_origin_btn = QtWidgets.QPushButton("Aplicar origen", group)
+        self._apply_origin_btn.clicked.connect(self._on_apply_origin)
+        form.addRow("", self._apply_origin_btn)
+
+        self._audio_status = QtWidgets.QLabel("", group)
+        self._audio_status.setWordWrap(True)
+        form.addRow("", self._audio_status)
+
+        self._streams_fetcher = None  # inyectable en tests
+        self._on_origin_changed(self._origin_combo.currentIndex())
+
+    def _on_origin_changed(self, index: int) -> None:
+        """Habilita el selector de stream solo para el origen 'app'."""
+        is_app = self._origin_combo.itemData(index) == "app"
+        self._stream_combo.setEnabled(is_app)
+        self._refresh_streams_btn.setEnabled(is_app)
+        if is_app and self._stream_combo.count() == 0:
+            self._on_refresh_streams()
+
+    def _on_refresh_streams(self) -> None:
+        """Lista los streams activos (apps/pestañas) sin bloquear la interfaz."""
+        import threading
+
+        self._refresh_streams_btn.setEnabled(False)
+        self._audio_status.setText("Buscando aplicaciones y pestañas con audio…")
+
+        def _work() -> None:
+            fetcher = self._streams_fetcher
+            try:
+                if fetcher is not None:
+                    streams = fetcher()
+                    error = ""
+                else:
+                    from app.audio.streams import list_audio_streams
+
+                    streams = list_audio_streams()
+                    error = ""
+            except Exception as exc:  # pragma: no cover - defensivo
+                streams, error = [], str(exc)
+            self._streams_relay.loaded.emit(list(streams), error)
+
+        threading.Thread(target=_work, name="audio-streams", daemon=True).start()
+
+    def _finish_streams(self, streams, error: str) -> None:
+        """Rellena el combo de streams con lo detectado."""
+        self._refresh_streams_btn.setEnabled(True)
+        if error:
+            self._audio_status.setText(f"No se pudieron detectar los streams: {error}")
+            return
+        current = self._stream_combo.currentData()
+        self._stream_combo.blockSignals(True)
+        self._stream_combo.clear()
+        for stream in streams:
+            self._stream_combo.addItem(stream.label, stream.spec)
+        self._stream_combo.blockSignals(False)
+        if not streams:
+            self._audio_status.setText(
+                "No hay ninguna app o pestaña reproduciendo audio. "
+                "Reproducí algo y volvé a pulsar Actualizar."
+            )
+            return
+        if current:
+            index = self._stream_combo.findData(current)
+            if index >= 0:
+                self._stream_combo.setCurrentIndex(index)
+        self._audio_status.setText(f"{len(streams)} streams detectados.")
+
+    def _on_apply_origin(self) -> None:
+        """Aplica el origen elegido: reconstruye la fuente y reinicia si corre."""
+        from app.core.factory import build_audio_source
+        from app.core.logging import get_logger
+
+        logger = get_logger(__name__)
+        source_id = str(self._origin_combo.currentData() or "monitor")
+        stream_spec: str | None = None
+        if source_id == "app":
+            stream_spec = self._stream_combo.currentData()
+            if not stream_spec:
+                self._audio_status.setText(
+                    "Elegí una aplicación o pestaña (pulsá Actualizar para detectarla)."
+                )
+                return
+        # La configuración solo se toca cuando el origen es válido: si la
+        # construcción de la fuente falla, el estado anterior queda intacto.
+        previous = (
+            self._settings.audio.source,
+            self._settings.audio.stream_spec,
+            self._settings.audio.stream_loopback,
+        )
+        self._settings.audio.source = source_id
+        self._settings.audio.stream_loopback = self._loopback_check.isChecked()
+        if stream_spec is not None:
+            self._settings.audio.stream_spec = str(stream_spec)
+        try:
+            source = build_audio_source(self._settings)
+        except Exception as exc:
+            (
+                self._settings.audio.source,
+                self._settings.audio.stream_spec,
+                self._settings.audio.stream_loopback,
+            ) = previous
+            self._audio_status.setText(f"No se pudo preparar el origen: {exc}")
+            logger.exception("origen de audio inválido")
+            return
+        try:
+            self._swap_audio_source(source)
+        except Exception as exc:
+            self._audio_status.setText(f"No se pudo aplicar el origen: {exc}")
+            logger.exception("fallo al cambiar la fuente de audio")
+            return
+        label = self._origin_combo.currentText()
+        if source_id == "app":
+            label = f"{label} ({self._stream_combo.currentText()})"
+        self._audio_status.setText(f"Origen aplicado: {label}.")
+
+    def _swap_audio_source(self, source) -> None:
+        """Cambia la fuente en vivo: stop → set_source → start."""
+        was_running = self._running
+        if was_running:
+            self._bridge.stop()
+            self._running = False
+        self._pipeline.set_source(source)
+        if was_running:
+            self._bridge.start()
+            self._running = True
+            self._toggle.setText("Detener")
+            self._status.setText("Escuchando…")
 
     # -- sección "Motor IA" -------------------------------------------------
     def _build_ai_section(self, central, layout) -> None:

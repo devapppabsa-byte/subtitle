@@ -73,6 +73,7 @@ class PipelineBridge(QObject):
     def start(self) -> None:
         """Arranca pipeline, renderizador y bombeo (``start_pipeline``)."""
         self._finished_emitted = False
+        self._drop_pending_finished()
         self._pipeline.start()
         if self._renderer is not None:
             self._renderer.start()
@@ -113,6 +114,24 @@ class PipelineBridge(QObject):
                 continue
             self._last_start = start
             self.cueReceived.emit(event)
+
+    def _drop_pending_finished(self) -> None:
+        """Quita los ``PipelineFinished`` que quedaron de una ejecución previa.
+
+        Sin esto, al reiniciar (por ejemplo tras cambiar el origen de audio)
+        el centinela viejo se leería como el final de la ejecución nueva y el
+        panel se cerraría solo.
+        """
+        from app.core.events import PipelineFinished
+
+        while True:
+            try:
+                event = self._pipeline.cues.get_nowait()
+            except Empty:
+                return
+            if isinstance(event, PipelineFinished):
+                continue
+            self._last_start = max(self._last_start, event.start_time or 0.0)
 
     def _discard_finished(self) -> None:
         """Descarta ``PipelineFinished`` pendientes para no re-emitir.

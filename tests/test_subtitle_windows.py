@@ -245,6 +245,158 @@ def test_finished_is_idempotent(qapp):
         window.hide()
 
 
+# -- sección "Origen de audio" ------------------------------------------------
+def _streams():
+    from app.audio.streams import AudioStreamInfo
+
+    return [
+        AudioStreamInfo(index=3, app="Chromium", title="YouTube", binary="chromium"),
+        AudioStreamInfo(index=4, app="Spotify", title="Song", binary="spotify"),
+    ]
+
+
+def test_audio_section_lists_streams(qapp):
+    """El botón Actualizar rellena el combo con las apps detectadas."""
+    main = _main_window(qapp)
+    main._streams_fetcher = _streams
+    main._on_refresh_streams()
+    main._finish_streams(_streams(), "")
+    assert main._stream_combo.count() == 2
+    assert "Chromium" in main._stream_combo.itemText(0)
+    assert main._stream_combo.itemData(0) == "chromium::YouTube"
+
+
+def test_audio_section_reports_no_streams(qapp):
+    main = _main_window(qapp)
+    main._finish_streams([], "")
+    assert main._stream_combo.count() == 0
+    assert "No hay ninguna app" in main._audio_status.text()
+
+
+def test_audio_section_app_origin_enables_stream_combo(qapp):
+    main = _main_window(qapp)
+    index = main._origin_combo.findData("app")
+    main._origin_combo.setCurrentIndex(index)
+    assert main._stream_combo.isEnabled() is True
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("monitor"))
+    assert main._stream_combo.isEnabled() is False
+
+
+def test_apply_origin_rebuilds_source(qapp):
+    """Aplicar un origen nuevo cambia la fuente del pipeline."""
+    from app.audio.synthetic import SyntheticAudioSource
+
+    main = _main_window(qapp)
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("synthetic"))
+    main._on_apply_origin()
+    assert main._settings.audio.source == "synthetic"
+    assert isinstance(main._pipeline.audio_source, SyntheticAudioSource)
+
+
+def test_apply_origin_app_requires_stream(qapp):
+    main = _main_window(qapp)
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("app"))
+    main._finish_streams([], "")
+    main._on_apply_origin()
+    assert "Elegí una aplicación" in main._audio_status.text()
+
+
+def test_apply_origin_keeps_config_when_source_is_invalid(qapp, monkeypatch):
+    """Si la fuente no se puede construir, la config queda como estaba."""
+    import app.core.factory as factory
+
+    main = _main_window(qapp)
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("synthetic"))
+    main._on_apply_origin()
+    assert main._settings.audio.source == "synthetic"
+
+    def boom(settings):
+        raise RuntimeError("no se puede")
+
+    monkeypatch.setattr(factory, "build_audio_source", boom)
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("monitor"))
+    main._on_apply_origin()
+    assert main._settings.audio.source == "synthetic"
+    assert "No se pudo preparar" in main._audio_status.text()
+
+
+def test_apply_origin_uses_selected_stream(qapp):
+    from app.audio.app_source import AppStreamAudioSource
+
+    main = _main_window(qapp)
+    main._finish_streams(_streams(), "")
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("app"))
+    main._on_apply_origin()
+    assert main._settings.audio.source == "app"
+    assert main._settings.audio.stream_spec == "chromium::YouTube"
+    assert isinstance(main._pipeline.audio_source, AppStreamAudioSource)
+    assert main._pipeline.audio_source.spec == "chromium::YouTube"
+
+
+def test_apply_origin_app_starts_and_restores_router(qapp, monkeypatch):
+    """Aplicar el origen 'app' enruta el stream y al parar lo devuelve."""
+    from app.audio import app_source
+
+    events: list[str] = []
+
+    class FakeRouter:
+        sink_name = "subtitle_capture"
+        capture_source = "subtitle_capture.monitor"
+
+        def ensure_null_sink(self):
+            events.append("ensure")
+            return True
+
+        def route_matching(self, spec):
+            events.append(f"route:{spec}")
+            return [3]
+
+        def enable_loopback(self):
+            events.append("loopback")
+            return True
+
+        def start_watching(self, spec):
+            events.append(f"watch:{spec}")
+
+        def restore(self):
+            events.append("restore")
+
+    monkeypatch.setattr(app_source, "StreamRouter", FakeRouter)
+    monkeypatch.setattr(app_source.AppStreamAudioSource, "_start_capture", lambda self: None)
+    monkeypatch.setattr(app_source.AppStreamAudioSource, "_stop_capture", lambda self: None)
+
+    main = _main_window(qapp)
+    main._finish_streams(_streams(), "")
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("app"))
+    main._on_apply_origin()
+    assert main._settings.audio.source == "app"
+
+    main.toggle_running()  # arranca el pipeline con la fuente de app
+    assert main._running is True
+    assert "ensure" in events
+    assert "route:chromium::YouTube" in events
+    assert "loopback" in events
+    assert "watch:chromium::YouTube" in events
+
+    main.toggle_running()  # lo para: debe restaurar los streams
+    assert "restore" in events
+    for window in main.windows.values():
+        window.hide()
+
+
+def test_apply_origin_keeps_running(qapp):
+    """Cambiar el origen con la app corriendo la deja corriendo."""
+    main = _main_window(qapp)
+    main.toggle_running()
+    assert main._running is True
+    main._origin_combo.setCurrentIndex(main._origin_combo.findData("synthetic"))
+    main._on_apply_origin()
+    assert main._running is True
+    main.toggle_running()
+    for window in main.windows.values():
+        window.hide()
+
+
 def test_qt_defaults_synthetic_to_monitor(qapp):
     """Sin --audio, el arranque gráfico no usa el demo sintético finito."""
     import main as entry
